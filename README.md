@@ -257,7 +257,6 @@ Jika mengalami masalah:
 
 ## 🎉 Credits
 
-- Design inspiration dari berbagai platform learning
 - Icons dari Lucide React
 - Images dari Unsplash
 - Font dari Google Fonts
