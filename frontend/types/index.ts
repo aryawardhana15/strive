@@ -85,6 +85,8 @@ export interface RoadmapStep {
   quiz_id?: number;
   completed?: boolean;
   completed_at?: string;
+  is_locked?: boolean;
+  can_take_quiz?: boolean;
 }
 
 export interface RoadmapProgress {
@@ -106,6 +108,8 @@ export interface UserRoadmapProgress {
 export interface Quiz {
   id: number;
   questions: QuizQuestion[];
+  step_id: number;
+  roadmap_id: number;
 }
 
 export interface QuizQuestion {
@@ -135,6 +139,8 @@ export interface QuizResult {
   }[];
   xp_earned: number;
   completed: boolean;
+  step_completed: boolean;
+  next_step_unlocked: boolean;
 }
 
 // Challenge types
@@ -192,6 +198,17 @@ export interface CVAnalysis {
     present: string[];
     missing: string[];
   };
+  sections_analysis: {
+    [key: string]: {
+      score: number;
+      feedback: string;
+    };
+  };
+  ats_compatibility: {
+    score: number;
+    feedback: string;
+  };
+  improvement_priority: string[];
 }
 
 // Community types
@@ -381,4 +398,8 @@ export interface LearningProgress {
     total_challenges: number;
     completed_challenges: number;
   }[];
+  total_xp: number;
+  total_study_time: number;
+  active_courses: number;
+  completed_courses: number;
 }

@@ -1,18 +1,24 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useDropzone } from 'react-dropzone';
-import { User, CVReview } from '@/types';
+import { User, CVReview, CVAnalysis } from '@/types';
 import { auth } from '@/lib/auth';
-import { usersAPI, cvAPI } from '@/lib/api';
-import { Upload, FileText, CheckCircle, Clock, AlertCircle, Download, Eye, Trash2 } from 'lucide-react';
+import { cvAPI } from '@/lib/api';
+import { Upload, FileText, CheckCircle, AlertCircle, Clock, Star, TrendingUp, Award, Download } from 'lucide-react';
+import CVAnalysisResult from '@/components/CVReview/CVAnalysisResult';
 
 export default function CVReviewPage() {
   const [user, setUser] = useState<User | null>(null);
-  const [cvHistory, setCvHistory] = useState<CVReview[]>([]);
+  const [cvReviews, setCvReviews] = useState<CVReview[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [dragActive, setDragActive] = useState(false);
+  const [stats, setStats] = useState({
+    totalReviews: 0,
+    averageScore: 0,
+    improvementSuggestions: 0
+  });
+  const [processingReview, setProcessingReview] = useState<CVReview | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -26,126 +32,191 @@ export default function CVReviewPage() {
 
         setUser(currentUser);
 
-        // Fetch CV history
-        setCvHistory([]);
+        // Fetch CV review history and stats
+        const [historyResponse, statsResponse] = await Promise.all([
+          cvAPI.getHistory(currentUser.id),
+          cvAPI.getStats(currentUser.id)
+        ]);
+
+        setCvReviews(historyResponse.data.data || []);
+        setStats(statsResponse.data.data || stats);
 
       } catch (error) {
-        console.error('Error initializing CV review:', error);
-      } finally {
-        setLoading(false);
+        console.error('Error initializing CV review page:', error);
       }
     };
 
     initializeCVReview();
   }, [router]);
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    const file = acceptedFiles[0];
-    if (!file) return;
-
-    // Validate file size (2MB limit)
-    if (file.size > 2 * 1024 * 1024) {
-      alert('File terlalu besar. Maksimal 2MB.');
-      return;
-    }
-
-    // Validate file type
-    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    if (!allowedTypes.includes(file.type)) {
-      alert('Format file tidak didukung. Gunakan PDF atau DOC/DOCX.');
-      return;
-    }
+  const handleFileUpload = async (file: File) => {
+    if (!user) return;
 
     setUploading(true);
     try {
-      const response = await cvAPI.upload(file);
-      const newCVReview = response.data.data;
+      const formData = new FormData();
+      formData.append('cv', file);
+
+      const response = await cvAPI.upload(formData);
+      const newReview = response.data.data;
       
-      // Add to history
-      setCvHistory(prev => [newCVReview, ...prev]);
-      
-      // Redirect to result page
-      router.push(`/cv-review/${newCVReview.id}`);
+      console.log('Upload response:', response.data);
+      console.log('New review:', newReview);
+
+      // Validate newReview before adding to state
+      if (!newReview || typeof newReview !== 'object') {
+        throw new Error('Invalid review data received from server');
+      }
+
+      // Add to the beginning of the list
+      setCvReviews(prev => {
+        const prevArray = Array.isArray(prev) ? prev : [];
+        return [newReview, ...prevArray];
+      });
+      setStats(prev => {
+        const prevStats = prev || { totalReviews: 0, averageScore: 0, improvementSuggestions: 0 };
+        return { ...prevStats, totalReviews: prevStats.totalReviews + 1 };
+      });
+
+      // Start polling for results
+      pollForResults(newReview.id);
+
     } catch (error) {
       console.error('Error uploading CV:', error);
-      alert('Gagal mengunggah CV. Silakan coba lagi.');
+      alert('Gagal mengupload CV. Silakan coba lagi.');
     } finally {
       setUploading(false);
     }
-  }, [router]);
+  };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'application/pdf': ['.pdf'],
-      'application/msword': ['.doc'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
-    },
-    multiple: false
-  });
+  const pollForResults = async (reviewId: number) => {
+    const maxAttempts = 30; // 5 minutes max
+    let attempts = 0;
+
+    // Set the review as processing
+    setProcessingReview(prev => {
+      const reviewsArray = Array.isArray(cvReviews) ? cvReviews : [];
+      return prev?.id === reviewId ? prev : reviewsArray.find(r => r.id === reviewId) || null;
+    });
+
+    const poll = async () => {
+      try {
+        const response = await cvAPI.getResult(reviewId);
+        const review = response.data.data;
+
+        if (review.status === 'completed') {
+          // Update the review in the list
+          setCvReviews(prev => {
+            const prevArray = Array.isArray(prev) ? prev : [];
+            return prevArray.map(r => r.id === reviewId ? review : r);
+          });
+          // Clear processing state
+          setProcessingReview(null);
+          return;
+        }
+
+        if (review.status === 'failed') {
+          console.error('CV analysis failed');
+          setProcessingReview(null);
+          return;
+        }
+
+        // Continue polling if still processing
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 10000); // Poll every 10 seconds
+        } else {
+          // Timeout
+          setProcessingReview(null);
+        }
+      } catch (error) {
+        console.error('Error polling for results:', error);
+        setProcessingReview(null);
+      }
+    };
+
+    poll();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    const file = files[0];
+    
+    if (file && isValidFile(file)) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && isValidFile(file)) {
+      handleFileUpload(file);
+    }
+  };
+
+  const isValidFile = (file: File) => {
+    const validTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    const maxSize = 2 * 1024 * 1024; // 2MB
+    
+    if (!validTypes.includes(file.type)) {
+      alert('Format file tidak didukung. Gunakan PDF atau Word document.');
+      return false;
+    }
+    
+    if (file.size > maxSize) {
+      alert('Ukuran file terlalu besar. Maksimal 2MB.');
+      return false;
+    }
+    
+    return true;
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
         return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'processing':
-        return <Clock className="w-5 h-5 text-yellow-500" />;
+        return <Clock className="w-5 h-5 text-yellow-500 animate-spin" />;
       case 'failed':
         return <AlertCircle className="w-5 h-5 text-red-500" />;
       default:
-        return <Clock className="w-5 h-5 text-gray-500" />;
+        return <Clock className="w-5 h-5 text-gray-400" />;
     }
   };
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'Selesai';
-      case 'processing':
-        return 'Sedang diproses';
-      case 'failed':
-        return 'Gagal';
-      default:
-        return 'Menunggu';
-    }
+  const getScoreColor = (score: number) => {
+    if (score >= 80) return 'text-green-600 bg-green-100';
+    if (score >= 60) return 'text-yellow-600 bg-yellow-100';
+    return 'text-red-600 bg-red-100';
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'text-green-600 bg-green-100';
-      case 'processing':
-        return 'text-yellow-600 bg-yellow-100';
-      case 'failed':
-        return 'text-red-600 bg-red-100';
-      default:
-        return 'text-gray-600 bg-gray-100';
-    }
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('id-ID', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
-
-  const handleViewResult = (cvId: number) => {
-    router.push(`/cv-review/${cvId}`);
-  };
-
-  const handleDeleteCV = async (cvId: number) => {
-    if (!confirm('Apakah Anda yakin ingin menghapus CV ini?')) return;
-    
-    try {
-      await cvAPI.delete(cvId);
-      setCvHistory(prev => prev.filter(cv => cv.id !== cvId));
-    } catch (error) {
-      console.error('Error deleting CV:', error);
-      alert('Gagal menghapus CV. Silakan coba lagi.');
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="loading-spinner"></div>
-      </div>
-    );
-  }
 
   if (!user) {
     return null;
@@ -156,137 +227,232 @@ export default function CVReviewPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-            <FileText className="w-8 h-8 text-blue-600" />
-            Unggah CV-mu
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Mulai langkah pertamamu dengan mengunggah CV agar Strive AI bisa menganalisis dan memberikan masukan terbaik.
+          <h1 className="text-2xl font-bold text-gray-900">Review CV</h1>
+          <p className="text-gray-600 mt-1">
+            Upload CV-mu dan dapatkan analisis mendalam dari AI
           </p>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="card">
+          <div className="flex items-center">
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <FileText className="w-6 h-6 text-blue-600" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Total Review</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.totalReviews}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="flex items-center">
+            <div className="p-3 bg-green-100 rounded-lg">
+              <Star className="w-6 h-6 text-green-600" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Skor Rata-rata</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.averageScore}/100</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="flex items-center">
+            <div className="p-3 bg-purple-100 rounded-lg">
+              <TrendingUp className="w-6 h-6 text-purple-600" />
+            </div>
+            <div className="ml-4">
+              <p className="text-sm font-medium text-gray-600">Saran Perbaikan</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.improvementSuggestions}</p>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Upload Section */}
       <div className="card">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Upload CV Baru</h2>
+        
         <div
-          {...getRootProps()}
-          className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors ${
-            isDragActive 
-              ? 'border-blue-500 bg-blue-50' 
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            dragActive 
+              ? 'border-primary-500 bg-primary-50' 
               : 'border-gray-300 hover:border-gray-400'
-          } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+          }`}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
         >
-          <input {...getInputProps()} disabled={uploading} />
-          
-          {uploading ? (
-            <div className="space-y-4">
-              <div className="loading-spinner mx-auto"></div>
-              <p className="text-gray-600">Mengunggah CV...</p>
+          <div className="space-y-4">
+            <div className="mx-auto w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
+              <Upload className="w-6 h-6 text-gray-600" />
             </div>
-          ) : (
-            <div className="space-y-4">
-              <Upload className="w-16 h-16 text-gray-400 mx-auto" />
-              <div>
-                <p className="text-lg font-medium text-gray-900 mb-2">
-                  Klik untuk unggah, atau drag & drop file kamu
-                </p>
-                <p className="text-sm text-gray-500">
-                  Pastikan CV tidak lebih dari 2MB
-                </p>
-              </div>
-              <div className="text-xs text-gray-400">
-                Format yang didukung: PDF, DOC, DOCX
-              </div>
+            
+            <div>
+              <p className="text-lg font-medium text-gray-900">
+                Drag & drop CV-mu di sini
+              </p>
+              <p className="text-sm text-gray-600 mt-1">
+                atau klik untuk memilih file
+              </p>
             </div>
-          )}
+
+            <div className="text-xs text-gray-500">
+              <p>Format yang didukung: PDF, DOC, DOCX</p>
+              <p>Ukuran maksimal: 2MB</p>
+            </div>
+
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={handleFileInput}
+              disabled={uploading}
+              className="hidden"
+              id="cv-upload"
+            />
+            
+            <label
+              htmlFor="cv-upload"
+              className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white ${
+                uploading 
+                  ? 'bg-gray-400 cursor-not-allowed' 
+                  : 'bg-primary-600 hover:bg-primary-700 cursor-pointer'
+              }`}
+            >
+              {uploading ? (
+                <>
+                  <div className="loading-spinner mr-2"></div>
+                  Mengupload...
+                </>
+              ) : (
+                'Pilih File'
+              )}
+            </label>
+          </div>
         </div>
       </div>
 
-      {/* CV History */}
-      {cvHistory.length > 0 && (
-        <div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">
-            Riwayat CV Review
-          </h2>
+      {/* Processing Review */}
+      {processingReview && (
+        <div className="card">
+          <div className="flex items-center space-x-3 mb-4">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Clock className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Sedang Menganalisis CV</h3>
+              <p className="text-sm text-gray-600">AI sedang menganalisis CV Anda...</p>
+            </div>
+          </div>
           
-          <div className="space-y-4">
-            {cvHistory.map((cv) => (
-              <div key={cv.id} className="card">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                      <FileText className="w-6 h-6 text-blue-600" />
-                    </div>
-                    
-                    <div>
-                      <h3 className="font-semibold text-gray-900">
-                        CV Review #{cv.id}
-                      </h3>
-                      <p className="text-sm text-gray-600">
-                        Diunggah pada {new Date(cv.created_at).toLocaleDateString('id-ID', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <div className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(cv.status)}`}>
-                      <div className="flex items-center gap-2">
-                        {getStatusIcon(cv.status)}
-                        {getStatusText(cv.status)}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {cv.status === 'completed' && (
-                        <button
-                          onClick={() => handleViewResult(cv.id)}
-                          className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                        >
-                          <Eye className="w-4 h-4" />
-                          Lihat Hasil
-                        </button>
-                      )}
-                      
-                      <button
-                        onClick={() => handleDeleteCV(cv.id)}
-                        className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Hapus
-                      </button>
-                    </div>
-                  </div>
-                </div>
+          <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-6 border border-blue-100">
+            <div className="flex items-center justify-center space-x-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <div className="text-center">
+                <p className="text-lg font-medium text-gray-900">Menganalisis CV...</p>
+                <p className="text-sm text-gray-600">Proses ini memakan waktu 1-2 menit</p>
               </div>
-            ))}
+            </div>
+            
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                <span>Membaca dan memproses konten CV</span>
+              </div>
+              <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                <span>Menganalisis struktur dan format</span>
+              </div>
+              <div className="flex items-center space-x-2 text-sm text-gray-600">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                <span>Memberikan saran perbaikan</span>
+              </div>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Tips Section */}
-      <div className="card bg-blue-50 border-blue-200">
-        <h3 className="font-semibold text-blue-900 mb-3">💡 Tips untuk CV yang Baik</h3>
-        <ul className="space-y-2 text-blue-800 text-sm">
-          <li>• Pastikan CV dalam format PDF untuk hasil terbaik</li>
-          <li>• Gunakan font yang mudah dibaca (Arial, Calibri, Times New Roman)</li>
-          <li>• Sertakan informasi kontak yang lengkap dan valid</li>
-          <li>• Tulis pengalaman kerja dengan detail dan hasil yang dicapai</li>
-          <li>• Sertakan skill dan sertifikasi yang relevan</li>
-          <li>• Pastikan tidak ada typo atau kesalahan penulisan</li>
-        </ul>
-      </div>
+      {/* CV Review History */}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Riwayat Review</h2>
+        
+        {cvReviews.length > 0 ? (
+          <div className="space-y-4">
+            {cvReviews.map((review) => (
+              <div key={review.id} className="card">
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex items-center space-x-3">
+                    {getStatusIcon(review.status)}
+                    <div>
+                      <h3 className="font-medium text-gray-900">
+                        CV Review #{review.id}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        {formatDate(review.created_at)}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  {review.status === 'completed' && review.result && (
+                    <div className={`px-3 py-1 rounded-full text-sm font-medium ${getScoreColor(review.result.overall_score)}`}>
+                      {review.result.overall_score}/100
+                    </div>
+                  )}
+                </div>
 
-      {/* AI Assistant Button */}
-      <div className="fixed bottom-6 right-6">
-        <button className="bg-blue-600 text-white px-4 py-3 rounded-xl shadow-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
-          <span className="text-sm font-medium">Tanya StriveAI ✨</span>
-        </button>
+                {review.status === 'completed' && review.result && (
+                  <CVAnalysisResult 
+                    analysis={review.result}
+                    onDownload={() => {
+                      // TODO: Implement download functionality
+                      console.log('Download CV');
+                    }}
+                    onShare={() => {
+                      // TODO: Implement share functionality
+                      console.log('Share results');
+                    }}
+                  />
+                )}
+
+                {review.status === 'processing' && (
+                  <div className="text-center py-4">
+                    <div className="loading-spinner mx-auto mb-2"></div>
+                    <p className="text-sm text-gray-600">Menganalisis CV...</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Proses ini memakan waktu 1-2 menit
+                    </p>
+                  </div>
+                )}
+
+                {review.status === 'failed' && (
+                  <div className="text-center py-4">
+                    <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
+                    <p className="text-sm text-gray-600">Gagal menganalisis CV</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Silakan coba upload ulang
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="card">
+            <div className="text-center py-12">
+              <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                Belum ada review CV
+              </h3>
+              <p className="text-gray-600">
+                Upload CV pertamamu untuk mendapatkan analisis mendalam dari AI.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
