@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { validate, updateProfileSchema } = require('../middleware/validation');
 const { uploadImage, handleUploadError } = require('../middleware/upload');
 const { updateStreak, getUserRank, generateStreakCalendar } = require('../utils/helpers');
@@ -9,7 +9,7 @@ const { errorResponse, successResponse } = require('../utils/helpers');
 const router = express.Router();
 
 // Get user profile
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', requireAuth, async (req, res) => {
   try {
     const userId = req.params.id;
 
@@ -56,7 +56,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Update user profile
-router.put('/:id', authenticateToken, validate(updateProfileSchema), async (req, res) => {
+router.put('/:id', requireAuth, validate(updateProfileSchema), async (req, res) => {
   try {
     const userId = req.params.id;
     const { name, avatar_url } = req.body;
@@ -105,7 +105,7 @@ router.put('/:id', authenticateToken, validate(updateProfileSchema), async (req,
 });
 
 // Upload avatar
-router.post('/:id/avatar', authenticateToken, uploadImage, handleUploadError, async (req, res) => {
+router.post('/:id/avatar', requireAuth, uploadImage, handleUploadError, async (req, res) => {
   try {
     const userId = req.params.id;
 
@@ -134,7 +134,7 @@ router.post('/:id/avatar', authenticateToken, uploadImage, handleUploadError, as
 });
 
 // Get user activities
-router.get('/:id/activities', authenticateToken, async (req, res) => {
+router.get('/:id/activities', requireAuth, async (req, res) => {
   try {
     const userId = req.params.id;
     const limit = parseInt(req.query.limit) || 10;
@@ -173,7 +173,7 @@ router.get('/:id/activities', authenticateToken, async (req, res) => {
 });
 
 // Get user's recommended jobs
-router.get('/:id/recommended-jobs', authenticateToken, async (req, res) => {
+router.get('/:id/recommended-jobs', requireAuth, async (req, res) => {
   try {
     const userId = req.params.id;
     const limit = parseInt(req.query.limit) || 10;
@@ -199,7 +199,7 @@ router.get('/:id/recommended-jobs', authenticateToken, async (req, res) => {
 });
 
 // Get user's learning progress
-router.get('/:id/progress', authenticateToken, async (req, res) => {
+router.get('/:id/progress', requireAuth, async (req, res) => {
   try {
     const userId = req.params.id;
 
@@ -240,7 +240,7 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
 });
 
 // Get user's XP history
-router.get('/:id/xp-history', authenticateToken, async (req, res) => {
+router.get('/:id/xp-history', requireAuth, async (req, res) => {
   try {
     const userId = req.params.id;
     const limit = parseInt(req.query.limit) || 20;

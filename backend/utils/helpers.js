@@ -1,251 +1,426 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const pool = require('../config/database');
-
-// Password hashing
-const hashPassword = async (password) => {
-  const saltRounds = 12;
-  return await bcrypt.hash(password, saltRounds);
+// Response helpers
+const successResponse = (res, data = null, message = 'Success', statusCode = 200) => {
+  return res.status(statusCode).json({
+    success: true,
+    message,
+    data
+  });
 };
 
-// Password verification
-const verifyPassword = async (password, hashedPassword) => {
-  return await bcrypt.compare(password, hashedPassword);
+const errorResponse = (res, statusCode = 500, message = 'Internal Server Error', error = null) => {
+  const response = {
+    success: false,
+    message
+  };
+
+  if (error && process.env.NODE_ENV === 'development') {
+    response.error = error;
+  }
+
+  return res.status(statusCode).json(response);
 };
 
-// JWT token generation
-const generateToken = (userId) => {
-  return jwt.sign(
-    { userId },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-  );
+// Validation helpers
+const validateEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+const validatePassword = (password) => {
+  // At least 6 characters, 1 uppercase, 1 lowercase, 1 number
+  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d@$!%*?&]{6,}$/;
+  return passwordRegex.test(password);
+};
+
+// File upload helpers
+const validateFileSize = (fileSize, maxSize = 2 * 1024 * 1024) => { // 2MB default
+  return fileSize <= maxSize;
+};
+
+const validateFileType = (mimetype, allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf']) => {
+  return allowedTypes.includes(mimetype);
+};
+
+// Pagination helpers
+const getPaginationParams = (req) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  return { page, limit, offset };
+};
+
+const getPaginationMeta = (page, limit, total) => {
+  const totalPages = Math.ceil(total / limit);
+  const hasNextPage = page < totalPages;
+  const hasPrevPage = page > 1;
+
+  return {
+    page,
+    limit,
+    total,
+    totalPages,
+    hasNextPage,
+    hasPrevPage
+  };
+};
+
+// Search helpers
+const buildSearchQuery = (searchTerm, searchFields) => {
+  if (!searchTerm || !searchFields.length) {
+    return { query: '', params: [] };
+  }
+
+  const conditions = searchFields.map(field => `${field} LIKE ?`).join(' OR ');
+  const searchPattern = `%${searchTerm}%`;
+  const params = searchFields.map(() => searchPattern);
+
+  return {
+    query: `WHERE ${conditions}`,
+    params
+  };
+};
+
+// Date helpers
+const formatDate = (date) => {
+  return new Date(date).toISOString().split('T')[0];
+};
+
+const getDateRange = (days = 7) => {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  return {
+    startDate: formatDate(startDate),
+    endDate: formatDate(endDate)
+  };
 };
 
 // XP calculation helpers
-const calculateXP = (activityType, difficulty = 'medium') => {
+const calculateXP = (type, difficulty = 'medium') => {
   const xpValues = {
-    quiz_complete: { easy: 10, medium: 20, hard: 30 },
-    challenge_complete: { easy: 25, medium: 50, hard: 100 },
-    cv_review: { easy: 15, medium: 15, hard: 15 },
-    streak_achieved: { easy: 5, medium: 10, hard: 20 },
+    quiz_complete: { easy: 20, medium: 40, hard: 60 },
+    challenge_complete: { easy: 50, medium: 100, hard: 200 },
+    cv_review: { easy: 30, medium: 30, hard: 30 },
+    streak_achieved: { easy: 10, medium: 10, hard: 10 },
     community_post: { easy: 5, medium: 5, hard: 5 },
-    skill_added: { easy: 10, medium: 10, hard: 10 }
+    skill_added: { easy: 25, medium: 25, hard: 25 },
+    course_complete: { easy: 100, medium: 200, hard: 300 }
   };
 
-  return xpValues[activityType]?.[difficulty] || 10;
+  return xpValues[type]?.[difficulty] || 10;
 };
 
-// Title calculation based on XP
-const calculateTitle = (xpTotal) => {
-  if (xpTotal >= 10000) return 'Expert';
-  if (xpTotal >= 5000) return 'Advanced';
-  if (xpTotal >= 2000) return 'Intermediate';
-  if (xpTotal >= 500) return 'Skill Explorer';
-  if (xpTotal >= 100) return 'Beginner+';
+// Title calculation helpers
+const getTitleFromXP = (xp) => {
+  if (xp >= 10000) return 'Expert';
+  if (xp >= 5000) return 'Advanced';
+  if (xp >= 2000) return 'Intermediate';
   return 'Beginner';
 };
 
-// Update user XP and title
-const updateUserXP = async (userId, xpAmount, sourceType, sourceId = null) => {
-  const connection = await pool.getConnection();
-  
-  try {
-    await connection.beginTransaction();
+// Streak calculation helpers
+const calculateStreak = (lastActiveDate, currentStreak) => {
+  if (!lastActiveDate) return 1;
 
-    // Update user XP
-    await connection.execute(
+  const today = new Date();
+  const lastActive = new Date(lastActiveDate);
+  const diffTime = today - lastActive;
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 1) {
+    return currentStreak + 1;
+  } else if (diffDays > 1) {
+    return 1;
+  }
+
+  return currentStreak;
+};
+
+// Random helpers
+const getRandomElement = (array) => {
+  return array[Math.floor(Math.random() * array.length)];
+};
+
+const generateRandomString = (length = 8) => {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
+
+// Error handling helpers
+const handleDatabaseError = (error) => {
+  console.error('Database error:', error);
+  
+  if (error.code === 'ER_DUP_ENTRY') {
+    return 'Duplicate entry found';
+  } else if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+    return 'Referenced record not found';
+  } else if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+    return 'Database access denied';
+  } else if (error.code === 'ECONNREFUSED') {
+    return 'Database connection refused';
+  }
+  
+  return 'Database operation failed';
+};
+
+const handleValidationError = (error) => {
+  if (error.name === 'ValidationError') {
+    return Object.values(error.errors).map(err => err.message).join(', ');
+  }
+  return error.message;
+};
+
+// Async error wrapper
+const asyncHandler = (fn) => {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
+
+// Cache helpers (simple in-memory cache)
+const cache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+const setCache = (key, value, ttl = CACHE_TTL) => {
+  cache.set(key, {
+    value,
+    expires: Date.now() + ttl
+  });
+};
+
+const getCache = (key) => {
+  const item = cache.get(key);
+  if (!item) return null;
+  
+  if (Date.now() > item.expires) {
+    cache.delete(key);
+    return null;
+  }
+  
+  return item.value;
+};
+
+const clearCache = (pattern = null) => {
+  if (!pattern) {
+    cache.clear();
+    return;
+  }
+  
+  for (const key of cache.keys()) {
+    if (key.includes(pattern)) {
+      cache.delete(key);
+    }
+  }
+};
+
+// Pagination helper for jobs route
+const paginate = (page, limit) => {
+  const offset = (page - 1) * limit;
+  return { offset, limit };
+};
+
+// User XP and streak helpers
+const updateUserXP = async (userId, xpAmount, sourceType, sourceId) => {
+  const pool = require('../config/database');
+  try {
+    // Add XP to user
+    await pool.execute(
       'UPDATE users SET xp_total = xp_total + ? WHERE id = ?',
       [xpAmount, userId]
     );
 
-    // Get updated user data
-    const [users] = await connection.execute(
+    // Record in XP history
+    await pool.execute(
+      'INSERT INTO user_xp_history (user_id, source_type, source_id, xp_amount) VALUES (?, ?, ?, ?)',
+      [userId, sourceType, sourceId, xpAmount]
+    );
+
+    // Record activity
+    await pool.execute(
+      'INSERT INTO activities (user_id, type, meta, xp_earned) VALUES (?, ?, ?, ?)',
+      [userId, sourceType, JSON.stringify({ source_id: sourceId }), xpAmount]
+    );
+
+    // Update user activity and title
+    await updateUserActivity(userId);
+
+  } catch (error) {
+    console.error('Error adding XP:', error);
+  }
+};
+
+const updateStreak = async (userId) => {
+  const pool = require('../config/database');
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Get user's last active date
+    const [users] = await pool.execute(
+      'SELECT last_active_date, streak_count FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (users.length === 0) return;
+
+    const user = users[0];
+    const lastActiveDate = user.last_active_date;
+    let newStreakCount = user.streak_count;
+
+    // Calculate new streak
+    if (lastActiveDate) {
+      const lastActive = new Date(lastActiveDate);
+      const todayDate = new Date(today);
+      const diffTime = todayDate - lastActive;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays === 1) {
+        // Consecutive day
+        newStreakCount += 1;
+      } else if (diffDays > 1) {
+        // Streak broken
+        newStreakCount = 1;
+      }
+      // If diffDays === 0, it's the same day, keep current streak
+    } else {
+      // First activity
+      newStreakCount = 1;
+    }
+
+    // Update user activity
+    await pool.execute(
+      'UPDATE users SET last_active_date = ?, streak_count = ? WHERE id = ?',
+      [today, newStreakCount, userId]
+    );
+
+    // Update title based on XP
+    await updateUserTitle(userId);
+
+  } catch (error) {
+    console.error('Error updating user activity:', error);
+  }
+};
+
+const updateUserActivity = async (userId) => {
+  return updateStreak(userId);
+};
+
+const updateUserTitle = async (userId) => {
+  const pool = require('../config/database');
+  try {
+    const [users] = await pool.execute(
       'SELECT xp_total FROM users WHERE id = ?',
       [userId]
     );
 
-    if (users.length > 0) {
-      const newTitle = calculateTitle(users[0].xp_total);
-      
-      // Update title if changed
-      await connection.execute(
-        'UPDATE users SET title = ? WHERE id = ?',
-        [newTitle, userId]
-      );
+    if (users.length === 0) return;
 
-      // Log XP history
-      await connection.execute(
-        'INSERT INTO user_xp_history (user_id, source_type, source_id, xp_amount) VALUES (?, ?, ?, ?)',
-        [userId, sourceType, sourceId, xpAmount]
-      );
+    const xpTotal = users[0].xp_total;
+    let newTitle = 'Beginner';
 
-      // Log activity
-      await connection.execute(
-        'INSERT INTO activities (user_id, type, xp_earned) VALUES (?, ?, ?)',
-        [userId, sourceType, xpAmount]
-      );
+    if (xpTotal >= 10000) {
+      newTitle = 'Expert';
+    } else if (xpTotal >= 5000) {
+      newTitle = 'Advanced';
+    } else if (xpTotal >= 2000) {
+      newTitle = 'Intermediate';
     }
 
-    await connection.commit();
-    return { success: true, newTitle };
+    await pool.execute(
+      'UPDATE users SET title = ? WHERE id = ?',
+      [newTitle, userId]
+    );
+
   } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
+    console.error('Error updating user title:', error);
   }
 };
 
-// Streak management
-const updateStreak = async (userId) => {
-  const today = new Date().toISOString().split('T')[0];
-  
-  const [users] = await pool.execute(
-    'SELECT last_active_date, streak_count FROM users WHERE id = ?',
-    [userId]
-  );
-
-  if (users.length === 0) return;
-
-  const user = users[0];
-  const lastActive = user.last_active_date ? new Date(user.last_active_date).toISOString().split('T')[0] : null;
-  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-
-  let newStreakCount = user.streak_count;
-
-  if (lastActive === today) {
-    // Already active today, no change needed
-    return;
-  } else if (lastActive === yesterday) {
-    // Consecutive day, increment streak
-    newStreakCount += 1;
-  } else {
-    // Streak broken, reset to 1
-    newStreakCount = 1;
-  }
-
-  await pool.execute(
-    'UPDATE users SET streak_count = ?, last_active_date = ? WHERE id = ?',
-    [newStreakCount, today, userId]
-  );
-
-  // Award streak bonus XP
-  if (newStreakCount > 0 && newStreakCount % 7 === 0) {
-    const streakXP = Math.min(newStreakCount * 2, 50); // Cap at 50 XP
-    await updateUserXP(userId, streakXP, 'streak_achieved');
-  }
-
-  return newStreakCount;
-};
-
-// Get user rank
 const getUserRank = async (userId) => {
-  const [users] = await pool.execute(
-    'SELECT COUNT(*) + 1 as rank FROM users WHERE xp_total > (SELECT xp_total FROM users WHERE id = ?)',
-    [userId]
-  );
-  
-  return users[0].rank;
+  const pool = require('../config/database');
+  try {
+    const [rankResult] = await pool.execute(
+      'SELECT COUNT(*) + 1 as rank FROM users WHERE xp_total > (SELECT xp_total FROM users WHERE id = ?)',
+      [userId]
+    );
+    return rankResult[0].rank;
+  } catch (error) {
+    console.error('Error getting user rank:', error);
+    return 1;
+  }
 };
 
-// Generate streak calendar data
 const generateStreakCalendar = (streakCount, lastActiveDate) => {
   const calendar = [];
   const today = new Date();
-  const lastActive = lastActiveDate ? new Date(lastActiveDate) : null;
   
-  // Generate 30 days of calendar data
+  // Generate last 30 days
   for (let i = 29; i >= 0; i--) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split('T')[0];
     
-    // Check if this date should be marked as active
-    let isActive = false;
-    if (lastActive) {
-      const daysDiff = Math.floor((today - lastActive) / (1000 * 60 * 60 * 24));
-      if (i <= daysDiff && i >= (daysDiff - streakCount + 1)) {
-        isActive = true;
-      }
-    }
+    const isActive = lastActiveDate && 
+      new Date(lastActiveDate).toDateString() === date.toDateString();
     
     calendar.push({
-      date: dateStr,
-      isActive: isActive
+      date: date.toISOString().split('T')[0],
+      isActive: isActive || false
     });
   }
   
   return calendar;
 };
 
-// Random avatar assignment
-const assignRandomAvatar = async (userId) => {
-  const [avatars] = await pool.execute('SELECT id, image_url FROM avatar_images ORDER BY RAND() LIMIT 1');
-  
-  if (avatars.length > 0) {
-    const avatar = avatars[0];
-    await pool.execute(
-      'UPDATE users SET avatar_url = ?, random_image_id = ? WHERE id = ?',
-      [avatar.image_url, avatar.id, userId]
-    );
-    return avatar.image_url;
-  }
-  
-  return null;
-};
-
-// Pagination helper
-const paginate = (page = 1, limit = 10) => {
-  const offset = (page - 1) * limit;
-  return { offset, limit };
-};
-
-// Search helper
-const buildSearchQuery = (searchTerm, fields) => {
-  if (!searchTerm) return '';
-  
-  const conditions = fields.map(field => `${field} LIKE ?`).join(' OR ');
-  const searchPattern = `%${searchTerm}%`;
-  
-  return {
-    whereClause: `WHERE ${conditions}`,
-    params: fields.map(() => searchPattern)
-  };
-};
-
-// Error response helper
-const errorResponse = (res, statusCode, message, details = null) => {
-  return res.status(statusCode).json({
-    error: message,
-    details: details,
-    timestamp: new Date().toISOString()
-  });
-};
-
-// Success response helper
-const successResponse = (res, data, message = 'Success') => {
-  return res.json({
-    success: true,
-    message: message,
-    data: data,
-    timestamp: new Date().toISOString()
-  });
-};
-
 module.exports = {
-  hashPassword,
-  verifyPassword,
-  generateToken,
+  // Response helpers
+  successResponse,
+  errorResponse,
+  
+  // Validation helpers
+  validateEmail,
+  validatePassword,
+  validateFileSize,
+  validateFileType,
+  
+  // Pagination helpers
+  getPaginationParams,
+  getPaginationMeta,
+  paginate,
+  
+  // Search helpers
+  buildSearchQuery,
+  
+  // Date helpers
+  formatDate,
+  getDateRange,
+  
+  // XP and title helpers
   calculateXP,
-  calculateTitle,
+  getTitleFromXP,
+  calculateStreak,
   updateUserXP,
   updateStreak,
+  updateUserActivity,
+  updateUserTitle,
   getUserRank,
   generateStreakCalendar,
-  assignRandomAvatar,
-  paginate,
-  buildSearchQuery,
-  errorResponse,
-  successResponse
+  
+  // Random helpers
+  getRandomElement,
+  generateRandomString,
+  
+  // Error handling
+  handleDatabaseError,
+  handleValidationError,
+  asyncHandler,
+  
+  // Cache helpers
+  setCache,
+  getCache,
+  clearCache
 };

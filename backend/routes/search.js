@@ -1,104 +1,120 @@
 const express = require('express');
 const pool = require('../config/database');
-const { optionalAuth } = require('../middleware/auth');
-const { buildSearchQuery } = require('../utils/helpers');
-const { errorResponse, successResponse } = require('../utils/helpers');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
+const { successResponse, errorResponse, getPaginationParams, getPaginationMeta, buildSearchQuery } = require('../utils/helpers');
 
 const router = express.Router();
 
 // Global search endpoint
 router.get('/', optionalAuth, async (req, res) => {
   try {
-    const { q: searchTerm, type, limit = 10 } = req.query;
+    const { q: searchTerm } = req.query;
+    const { page, limit, offset } = getPaginationParams(req);
 
-    if (!searchTerm || searchTerm.trim().length === 0) {
-      return errorResponse(res, 400, 'Search term is required');
+    if (!searchTerm || searchTerm.trim().length < 2) {
+      return errorResponse(res, 400, 'Search term must be at least 2 characters long');
     }
 
     const searchResults = {
       jobs: [],
       courses: [],
-      community_posts: [],
+      posts: [],
       users: []
     };
 
     // Search jobs
-    if (!type || type === 'jobs') {
-      const jobSearch = buildSearchQuery(searchTerm, ['title', 'company', 'description']);
-      const [jobs] = await pool.execute(
-        `SELECT id, title, company, location, salary_min, salary_max, tags, description, is_remote, is_fulltime
-         FROM jobs 
-         ${jobSearch.whereClause}
-         ORDER BY 
-           CASE 
-             WHEN title LIKE ? THEN 1
-             WHEN company LIKE ? THEN 2
-             WHEN description LIKE ? THEN 3
-             ELSE 4
-           END
-         LIMIT ?`,
-        [...jobSearch.params, ...jobSearch.params.slice(0, 3), parseInt(limit)]
-      );
-      searchResults.jobs = jobs;
-    }
+    const jobSearch = buildSearchQuery(searchTerm, ['title', 'company', 'description']);
+    const [jobs] = await pool.execute(
+      `SELECT id, title, company, location, salary_min, salary_max, tags, description, is_remote, is_fulltime, created_at
+       FROM jobs 
+       ${jobSearch.query}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...jobSearch.params, limit, offset]
+    );
 
-    // Search courses (roadmaps)
-    if (!type || type === 'courses') {
-      const courseSearch = buildSearchQuery(searchTerm, ['title', 'description']);
-      const [courses] = await pool.execute(
-        `SELECT id, title, description, created_at
-         FROM roadmaps 
-         ${courseSearch.whereClause}
-         ORDER BY 
-           CASE 
-             WHEN title LIKE ? THEN 1
-             WHEN description LIKE ? THEN 2
-             ELSE 3
-           END
-         LIMIT ?`,
-        [...courseSearch.params, ...courseSearch.params.slice(0, 2), parseInt(limit)]
-      );
-      searchResults.courses = courses;
-    }
+    // Get total jobs count
+    const [jobCount] = await pool.execute(
+      `SELECT COUNT(*) as total FROM jobs ${jobSearch.query}`,
+      jobSearch.params
+    );
+
+    searchResults.jobs = {
+      data: jobs,
+      pagination: getPaginationMeta(page, limit, jobCount[0].total)
+    };
+
+    // Search courses
+    const courseSearch = buildSearchQuery(searchTerm, ['title', 'description']);
+    const [courses] = await pool.execute(
+      `SELECT id, title, description, image_url, xp_reward, created_at
+       FROM courses 
+       ${courseSearch.query}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...courseSearch.params, limit, offset]
+    );
+
+    // Get total courses count
+    const [courseCount] = await pool.execute(
+      `SELECT COUNT(*) as total FROM courses ${courseSearch.query}`,
+      courseSearch.params
+    );
+
+    searchResults.courses = {
+      data: courses,
+      pagination: getPaginationMeta(page, limit, courseCount[0].total)
+    };
 
     // Search community posts
-    if (!type || type === 'posts') {
-      const postSearch = buildSearchQuery(searchTerm, ['content']);
-      const [posts] = await pool.execute(
-        `SELECT p.id, p.content, p.image_url, p.likes_count, p.created_at,
-                u.id as user_id, u.name as user_name, u.avatar_url as user_avatar, u.title as user_title
-         FROM community_posts p
-         JOIN users u ON p.user_id = u.id
-         ${postSearch.whereClause}
-         ORDER BY p.created_at DESC
-         LIMIT ?`,
-        [...postSearch.params, parseInt(limit)]
-      );
-      searchResults.community_posts = posts;
-    }
+    const postSearch = buildSearchQuery(searchTerm, ['content']);
+    const [posts] = await pool.execute(
+      `SELECT p.id, p.content, p.image_url, p.likes_count, p.created_at, u.name as author_name, u.avatar_url as author_avatar
+       FROM community_posts p
+       JOIN users u ON p.user_id = u.id
+       ${postSearch.query}
+       ORDER BY p.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...postSearch.params, limit, offset]
+    );
 
-    // Search users
-    if (!type || type === 'users') {
+    // Get total posts count
+    const [postCount] = await pool.execute(
+      `SELECT COUNT(*) as total FROM community_posts p ${postSearch.query}`,
+      postSearch.params
+    );
+
+    searchResults.posts = {
+      data: posts,
+      pagination: getPaginationMeta(page, limit, postCount[0].total)
+    };
+
+    // Search users (only if authenticated)
+    if (req.user) {
       const userSearch = buildSearchQuery(searchTerm, ['name', 'title']);
       const [users] = await pool.execute(
         `SELECT id, name, avatar_url, title, xp_total, streak_count
          FROM users 
-         ${userSearch.whereClause}
+         ${userSearch.query}
+         AND id != ?
          ORDER BY xp_total DESC
-         LIMIT ?`,
-        [...userSearch.params, parseInt(limit)]
+         LIMIT ? OFFSET ?`,
+        [...userSearch.params, req.user.id, limit, offset]
       );
-      searchResults.users = users;
+
+      // Get total users count
+      const [userCount] = await pool.execute(
+        `SELECT COUNT(*) as total FROM users ${userSearch.query} AND id != ?`,
+        [...userSearch.params, req.user.id]
+      );
+
+      searchResults.users = {
+        data: users,
+        pagination: getPaginationMeta(page, limit, userCount[0].total)
+      };
     }
 
-    // Calculate total results
-    const totalResults = Object.values(searchResults).reduce((sum, results) => sum + results.length, 0);
-
-    return successResponse(res, {
-      search_term: searchTerm,
-      total_results: totalResults,
-      results: searchResults
-    }, 'Search completed successfully');
+    return successResponse(res, searchResults, 'Search completed successfully');
 
   } catch (error) {
     console.error('Search error:', error);
@@ -109,178 +125,211 @@ router.get('/', optionalAuth, async (req, res) => {
 // Search jobs specifically
 router.get('/jobs', optionalAuth, async (req, res) => {
   try {
-    const { q: searchTerm, location, remote, fulltime, min_salary, max_salary, limit = 20, page = 1 } = req.query;
+    const { q: searchTerm, location, remote, salary_min, salary_max, tags } = req.query;
+    const { page, limit, offset } = getPaginationParams(req);
 
-    if (!searchTerm || searchTerm.trim().length === 0) {
-      return errorResponse(res, 400, 'Search term is required');
+    let whereConditions = [];
+    let params = [];
+
+    // Text search
+    if (searchTerm && searchTerm.trim().length >= 2) {
+      const search = buildSearchQuery(searchTerm, ['title', 'company', 'description']);
+      whereConditions.push(`(${search.query.replace('WHERE ', '')})`);
+      params.push(...search.params);
     }
 
-    const offset = (page - 1) * limit;
-    const searchQuery = buildSearchQuery(searchTerm, ['title', 'company', 'description']);
-
-    let whereConditions = [searchQuery.whereClause];
-    let params = [...searchQuery.params];
-
-    // Add additional filters
+    // Location filter
     if (location) {
       whereConditions.push('location LIKE ?');
       params.push(`%${location}%`);
     }
 
+    // Remote filter
     if (remote !== undefined) {
       whereConditions.push('is_remote = ?');
       params.push(remote === 'true' ? 1 : 0);
     }
 
-    if (fulltime !== undefined) {
-      whereConditions.push('is_fulltime = ?');
-      params.push(fulltime === 'true' ? 1 : 0);
-    }
-
-    if (min_salary) {
+    // Salary filters
+    if (salary_min) {
       whereConditions.push('salary_max >= ?');
-      params.push(parseInt(min_salary));
+      params.push(parseInt(salary_min));
     }
 
-    if (max_salary) {
+    if (salary_max) {
       whereConditions.push('salary_min <= ?');
-      params.push(parseInt(max_salary));
+      params.push(parseInt(salary_max));
     }
 
-    const whereClause = whereConditions.join(' AND ');
+    // Tags filter
+    if (tags) {
+      const tagList = tags.split(',').map(tag => tag.trim());
+      const tagConditions = tagList.map(() => 'JSON_SEARCH(tags, "one", ?) IS NOT NULL');
+      whereConditions.push(`(${tagConditions.join(' OR ')})`);
+      params.push(...tagList);
+    }
 
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+
+    // Get jobs
     const [jobs] = await pool.execute(
       `SELECT id, title, company, location, salary_min, salary_max, tags, description, is_remote, is_fulltime, created_at
        FROM jobs 
-       WHERE ${whereClause}
-       ORDER BY 
-         CASE 
-           WHEN title LIKE ? THEN 1
-           WHEN company LIKE ? THEN 2
-           WHEN description LIKE ? THEN 3
-           ELSE 4
-         END,
-         created_at DESC
+       ${whereClause}
+       ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
-      [...params, ...searchQuery.params.slice(0, 3), parseInt(limit), offset]
+      [...params, limit, offset]
     );
 
-    // Get total count for pagination
-    const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total FROM jobs WHERE ${whereClause}`,
+    // Get total count
+    const [count] = await pool.execute(
+      `SELECT COUNT(*) as total FROM jobs ${whereClause}`,
       params
     );
 
     return successResponse(res, {
-      jobs,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: countResult[0].total,
-        pages: Math.ceil(countResult[0].total / limit)
-      }
-    }, 'Job search completed successfully');
+      data: jobs,
+      pagination: getPaginationMeta(page, limit, count[0].total)
+    }, 'Jobs search completed successfully');
 
   } catch (error) {
-    console.error('Job search error:', error);
-    return errorResponse(res, 500, 'Job search failed', error.message);
+    console.error('Jobs search error:', error);
+    return errorResponse(res, 500, 'Jobs search failed', error.message);
   }
 });
 
-// Search community posts specifically
+// Search courses specifically
+router.get('/courses', optionalAuth, async (req, res) => {
+  try {
+    const { q: searchTerm } = req.query;
+    const { page, limit, offset } = getPaginationParams(req);
+
+    let whereClause = '';
+    let params = [];
+
+    if (searchTerm && searchTerm.trim().length >= 2) {
+      const search = buildSearchQuery(searchTerm, ['title', 'description']);
+      whereClause = search.query;
+      params = search.params;
+    }
+
+    // Get courses
+    const [courses] = await pool.execute(
+      `SELECT id, title, description, image_url, xp_reward, created_at
+       FROM courses 
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    // Get total count
+    const [count] = await pool.execute(
+      `SELECT COUNT(*) as total FROM courses ${whereClause}`,
+      params
+    );
+
+    return successResponse(res, {
+      data: courses,
+      pagination: getPaginationMeta(page, limit, count[0].total)
+    }, 'Courses search completed successfully');
+
+  } catch (error) {
+    console.error('Courses search error:', error);
+    return errorResponse(res, 500, 'Courses search failed', error.message);
+  }
+});
+
+// Search community posts
 router.get('/posts', optionalAuth, async (req, res) => {
   try {
-    const { q: searchTerm, limit = 20, page = 1 } = req.query;
+    const { q: searchTerm } = req.query;
+    const { page, limit, offset } = getPaginationParams(req);
 
-    if (!searchTerm || searchTerm.trim().length === 0) {
-      return errorResponse(res, 400, 'Search term is required');
+    let whereClause = '';
+    let params = [];
+
+    if (searchTerm && searchTerm.trim().length >= 2) {
+      const search = buildSearchQuery(searchTerm, ['content']);
+      whereClause = `WHERE ${search.query.replace('WHERE ', '')}`;
+      params = search.params;
     }
 
-    const offset = (page - 1) * limit;
-    const searchQuery = buildSearchQuery(searchTerm, ['content']);
-
+    // Get posts with author info
     const [posts] = await pool.execute(
-      `SELECT p.id, p.content, p.image_url, p.likes_count, p.created_at,
-              u.id as user_id, u.name as user_name, u.avatar_url as user_avatar, u.title as user_title
+      `SELECT p.id, p.content, p.image_url, p.likes_count, p.created_at, 
+              u.id as author_id, u.name as author_name, u.avatar_url as author_avatar, u.title as author_title
        FROM community_posts p
        JOIN users u ON p.user_id = u.id
-       WHERE ${searchQuery.whereClause}
+       ${whereClause}
        ORDER BY p.created_at DESC
        LIMIT ? OFFSET ?`,
-      [...searchQuery.params, parseInt(limit), offset]
+      [...params, limit, offset]
     );
 
-    // Get total count for pagination
-    const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total 
-       FROM community_posts p
-       WHERE ${searchQuery.whereClause}`,
-      searchQuery.params
+    // Get total count
+    const [count] = await pool.execute(
+      `SELECT COUNT(*) as total FROM community_posts p ${whereClause}`,
+      params
     );
 
     return successResponse(res, {
-      posts,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: countResult[0].total,
-        pages: Math.ceil(countResult[0].total / limit)
-      }
-    }, 'Post search completed successfully');
+      data: posts,
+      pagination: getPaginationMeta(page, limit, count[0].total)
+    }, 'Posts search completed successfully');
 
   } catch (error) {
-    console.error('Post search error:', error);
-    return errorResponse(res, 500, 'Post search failed', error.message);
+    console.error('Posts search error:', error);
+    return errorResponse(res, 500, 'Posts search failed', error.message);
   }
 });
 
-// Search users specifically
-router.get('/users', optionalAuth, async (req, res) => {
+// Search users (authenticated only)
+router.get('/users', requireAuth, async (req, res) => {
   try {
-    const { q: searchTerm, limit = 20, page = 1 } = req.query;
+    const { q: searchTerm } = req.query;
+    const { page, limit, offset } = getPaginationParams(req);
 
-    if (!searchTerm || searchTerm.trim().length === 0) {
-      return errorResponse(res, 400, 'Search term is required');
+    let whereClause = 'WHERE id != ?';
+    let params = [req.user.id];
+
+    if (searchTerm && searchTerm.trim().length >= 2) {
+      const search = buildSearchQuery(searchTerm, ['name', 'title']);
+      whereClause += ` AND (${search.query.replace('WHERE ', '')})`;
+      params.push(...search.params);
     }
 
-    const offset = (page - 1) * limit;
-    const searchQuery = buildSearchQuery(searchTerm, ['name', 'title']);
-
+    // Get users
     const [users] = await pool.execute(
-      `SELECT id, name, avatar_url, title, xp_total, streak_count, created_at
+      `SELECT id, name, avatar_url, title, xp_total, streak_count, last_active_date
        FROM users 
-       WHERE ${searchQuery.whereClause}
+       ${whereClause}
        ORDER BY xp_total DESC
        LIMIT ? OFFSET ?`,
-      [...searchQuery.params, parseInt(limit), offset]
+      [...params, limit, offset]
     );
 
-    // Get total count for pagination
-    const [countResult] = await pool.execute(
-      `SELECT COUNT(*) as total FROM users WHERE ${searchQuery.whereClause}`,
-      searchQuery.params
+    // Get total count
+    const [count] = await pool.execute(
+      `SELECT COUNT(*) as total FROM users ${whereClause}`,
+      params
     );
 
     return successResponse(res, {
-      users,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: countResult[0].total,
-        pages: Math.ceil(countResult[0].total / limit)
-      }
-    }, 'User search completed successfully');
+      data: users,
+      pagination: getPaginationMeta(page, limit, count[0].total)
+    }, 'Users search completed successfully');
 
   } catch (error) {
-    console.error('User search error:', error);
-    return errorResponse(res, 500, 'User search failed', error.message);
+    console.error('Users search error:', error);
+    return errorResponse(res, 500, 'Users search failed', error.message);
   }
 });
 
 // Get search suggestions
-router.get('/suggestions', async (req, res) => {
+router.get('/suggestions', optionalAuth, async (req, res) => {
   try {
-    const { q: searchTerm, limit = 5 } = req.query;
+    const { q: searchTerm } = req.query;
 
     if (!searchTerm || searchTerm.trim().length < 2) {
       return successResponse(res, [], 'No suggestions available');
@@ -290,32 +339,29 @@ router.get('/suggestions', async (req, res) => {
 
     // Get job title suggestions
     const [jobTitles] = await pool.execute(
-      'SELECT DISTINCT title FROM jobs WHERE title LIKE ? LIMIT ?',
-      [`%${searchTerm}%`, parseInt(limit)]
+      `SELECT DISTINCT title FROM jobs WHERE title LIKE ? LIMIT 5`,
+      [`%${searchTerm}%`]
     );
     suggestions.push(...jobTitles.map(job => ({ type: 'job', text: job.title })));
 
-    // Get company suggestions
-    const [companies] = await pool.execute(
-      'SELECT DISTINCT company FROM jobs WHERE company LIKE ? LIMIT ?',
-      [`%${searchTerm}%`, parseInt(limit)]
+    // Get course title suggestions
+    const [courseTitles] = await pool.execute(
+      `SELECT DISTINCT title FROM courses WHERE title LIKE ? LIMIT 5`,
+      [`%${searchTerm}%`]
     );
-    suggestions.push(...companies.map(company => ({ type: 'company', text: company.company })));
+    suggestions.push(...courseTitles.map(course => ({ type: 'course', text: course.title })));
 
     // Get skill suggestions
     const [skills] = await pool.execute(
-      'SELECT DISTINCT name FROM skills WHERE name LIKE ? LIMIT ?',
-      [`%${searchTerm}%`, parseInt(limit)]
+      `SELECT DISTINCT name FROM skills WHERE name LIKE ? LIMIT 5`,
+      [`%${searchTerm}%`]
     );
     suggestions.push(...skills.map(skill => ({ type: 'skill', text: skill.name })));
 
-    // Limit total suggestions
-    const limitedSuggestions = suggestions.slice(0, parseInt(limit));
-
-    return successResponse(res, limitedSuggestions, 'Search suggestions retrieved successfully');
+    return successResponse(res, suggestions.slice(0, 10), 'Search suggestions retrieved successfully');
 
   } catch (error) {
-    console.error('Get search suggestions error:', error);
+    console.error('Search suggestions error:', error);
     return errorResponse(res, 500, 'Failed to get search suggestions', error.message);
   }
 });

@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { validate, addSkillSchema } = require('../middleware/validation');
 const { updateUserXP, updateStreak } = require('../utils/helpers');
 const { matchSkillsToJobs } = require('../utils/ai');
@@ -63,7 +63,7 @@ router.get('/categories', async (req, res) => {
 });
 
 // Add skill to user
-router.post('/users/:userId/skills', authenticateToken, validate(addSkillSchema), async (req, res) => {
+router.post('/users/:userId/skills', requireAuth, validate(addSkillSchema), async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const { skill_id, level } = req.body;
@@ -131,7 +131,7 @@ router.post('/users/:userId/skills', authenticateToken, validate(addSkillSchema)
 });
 
 // Remove skill from user
-router.delete('/users/:userId/skills/:skillId', authenticateToken, async (req, res) => {
+router.delete('/users/:userId/skills/:skillId', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const skillId = parseInt(req.params.skillId);
@@ -176,7 +176,7 @@ router.delete('/users/:userId/skills/:skillId', authenticateToken, async (req, r
 });
 
 // Update skill level
-router.put('/users/:userId/skills/:skillId', authenticateToken, async (req, res) => {
+router.put('/users/:userId/skills/:skillId', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const skillId = parseInt(req.params.skillId);
@@ -226,7 +226,7 @@ router.put('/users/:userId/skills/:skillId', authenticateToken, async (req, res)
 });
 
 // Get user's skills
-router.get('/users/:userId', authenticateToken, async (req, res) => {
+router.get('/users/:userId', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
 
@@ -309,7 +309,7 @@ const generateJobRecommendations = async (userId) => {
 };
 
 // Trigger job recommendations generation
-router.post('/users/:userId/generate-recommendations', authenticateToken, async (req, res) => {
+router.post('/users/:userId/generate-recommendations', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
 
