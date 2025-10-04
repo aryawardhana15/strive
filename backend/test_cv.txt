@@ -1,0 +1,21 @@
+JOHN DOE
+Senior Software Developer
+Email: john.doe@email.com | Phone: (555) 123-4567
+
+PROFESSIONAL SUMMARY
+Experienced software developer with 5+ years of experience in full-stack development.
+
+TECHNICAL SKILLS
+• JavaScript, React, Node.js, Python
+• MySQL, PostgreSQL, MongoDB
+• Git, Docker, AWS
+
+WORK EXPERIENCE
+Senior Software Developer | TechCorp Inc. | 2021 - Present
+• Developed web applications using React and Node.js
+• Collaborated with cross-functional teams
+• Implemented automated testing and CI/CD pipelines
+
+EDUCATION
+Bachelor of Science in Computer Science
+University of Technology | 2015 - 2019
