@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken, optionalAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { paginate, buildSearchQuery } = require('../utils/helpers');
 const { errorResponse, successResponse } = require('../utils/helpers');
 
@@ -138,7 +138,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 });
 
 // Get user's recommended jobs
-router.get('/users/:userId/recommended', authenticateToken, async (req, res) => {
+router.get('/users/:userId/recommended', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const limit = parseInt(req.query.limit) || 10;
