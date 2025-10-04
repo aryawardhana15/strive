@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken, optionalAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { validate, createPostSchema, commentSchema } = require('../middleware/validation');
 const { uploadImage, handleUploadError } = require('../middleware/upload');
 const { updateUserXP, updateStreak } = require('../utils/helpers');
@@ -96,7 +96,7 @@ router.get('/posts/:id', optionalAuth, async (req, res) => {
 });
 
 // Create a new post
-router.post('/posts', authenticateToken, validate(createPostSchema), async (req, res) => {
+router.post('/posts', requireAuth, validate(createPostSchema), async (req, res) => {
   try {
     const userId = req.user.id;
     const { content, image_url } = req.body;
@@ -133,7 +133,7 @@ router.post('/posts', authenticateToken, validate(createPostSchema), async (req,
 });
 
 // Upload image for post
-router.post('/posts/upload-image', authenticateToken, uploadImage, handleUploadError, async (req, res) => {
+router.post('/posts/upload-image', requireAuth, uploadImage, handleUploadError, async (req, res) => {
   try {
     if (!req.file) {
       return errorResponse(res, 400, 'No image file uploaded');
@@ -150,7 +150,7 @@ router.post('/posts/upload-image', authenticateToken, uploadImage, handleUploadE
 });
 
 // Like/unlike a post
-router.post('/posts/:id/like', authenticateToken, async (req, res) => {
+router.post('/posts/:id/like', requireAuth, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user.id;
@@ -208,7 +208,7 @@ router.post('/posts/:id/like', authenticateToken, async (req, res) => {
 });
 
 // Add comment to a post
-router.post('/posts/:id/comments', authenticateToken, validate(commentSchema), async (req, res) => {
+router.post('/posts/:id/comments', requireAuth, validate(commentSchema), async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user.id;
@@ -250,7 +250,7 @@ router.post('/posts/:id/comments', authenticateToken, validate(commentSchema), a
 });
 
 // Get recent chats (for sidebar widget)
-router.get('/recent-chats', authenticateToken, async (req, res) => {
+router.get('/recent-chats', requireAuth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 5;
 
@@ -317,7 +317,7 @@ router.get('/users/:userId/posts', optionalAuth, async (req, res) => {
 });
 
 // Delete a post (only by the author)
-router.delete('/posts/:id', authenticateToken, async (req, res) => {
+router.delete('/posts/:id', requireAuth, async (req, res) => {
   try {
     const postId = req.params.id;
     const userId = req.user.id;
@@ -346,7 +346,7 @@ router.delete('/posts/:id', authenticateToken, async (req, res) => {
 });
 
 // Delete a comment (only by the author)
-router.delete('/comments/:id', authenticateToken, async (req, res) => {
+router.delete('/comments/:id', requireAuth, async (req, res) => {
   try {
     const commentId = req.params.id;
     const userId = req.user.id;

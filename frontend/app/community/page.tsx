@@ -2,18 +2,22 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, CommunityPost, PostComment } from '@/types';
+import { User, CommunityPost, Comment } from '@/types';
 import { auth } from '@/lib/auth';
-import { usersAPI, communityAPI } from '@/lib/api';
-import { Search, Camera, Video, Code, ThumbsUp, ThumbsDown, MessageCircle, Bookmark, MoreHorizontal, Send } from 'lucide-react';
+import { communityAPI } from '@/lib/api';
+import { MessageCircle, Heart, Share, MoreHorizontal, Send, Image, Code, Smile, Bookmark } from 'lucide-react';
 
 export default function CommunityPage() {
   const [user, setUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<CommunityPost[]>([]);
-  const [recentChats, setRecentChats] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newPostContent, setNewPostContent] = useState('');
+  const [newPost, setNewPost] = useState({
+    content: '',
+    image: null as File | null
+  });
+  const [showNewPost, setShowNewPost] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [recentChats, setRecentChats] = useState<any[]>([]);
   const router = useRouter();
 
   useEffect(() => {
@@ -28,15 +32,16 @@ export default function CommunityPage() {
         setUser(currentUser);
 
         // Fetch posts and recent chats
-        const [postsResponse] = await Promise.all([
-          communityAPI.getPosts({ limit: 20 })
+        const [postsResponse, chatsResponse] = await Promise.all([
+          communityAPI.getPosts(),
+          communityAPI.getRecentChats()
         ]);
 
         setPosts(postsResponse.data.data || []);
-        setRecentChats([]);
+        setRecentChats(chatsResponse.data.data || []);
 
       } catch (error) {
-        console.error('Error initializing community:', error);
+        console.error('Error initializing community page:', error);
       } finally {
         setLoading(false);
       }
@@ -46,16 +51,31 @@ export default function CommunityPage() {
   }, [router]);
 
   const handleCreatePost = async () => {
-    if (!newPostContent.trim() || posting) return;
+    if (!user || !newPost.content.trim()) return;
 
     setPosting(true);
     try {
-      const response = await communityAPI.createPost(newPostContent);
-      const newPost = response.data.data;
+      let imageUrl = null;
       
-      // Add to posts list
-      setPosts(prev => [newPost, ...prev]);
-      setNewPostContent('');
+      // Upload image first if exists
+      if (newPost.image) {
+        const formData = new FormData();
+        formData.append('image', newPost.image);
+        const uploadResponse = await communityAPI.uploadImage(newPost.image);
+        imageUrl = uploadResponse.data.data.image_url;
+      }
+
+      // Create post
+      const response = await communityAPI.createPost(newPost.content, imageUrl);
+      const createdPost = response.data.data;
+
+      // Add to the beginning of the list
+      setPosts(prev => [createdPost, ...prev]);
+      
+      // Reset form
+      setNewPost({ content: '', image: null });
+      setShowNewPost(false);
+
     } catch (error) {
       console.error('Error creating post:', error);
       alert('Gagal membuat post. Silakan coba lagi.');
@@ -65,108 +85,45 @@ export default function CommunityPage() {
   };
 
   const handleLikePost = async (postId: number) => {
+    if (!user) return;
+
     try {
       await communityAPI.likePost(postId);
       
-      // Update posts list
-      setPosts(prev => prev.map(post => 
-        post.id === postId 
-          ? { ...post, likes_count: post.likes_count + 1 }
-          : post
-      ));
+      // Update the post in the list
+      setPosts(prev => 
+        prev.map(post => 
+          post.id === postId 
+            ? { 
+                ...post, 
+                likes_count: post.is_liked ? post.likes_count - 1 : post.likes_count + 1,
+                is_liked: !post.is_liked
+              }
+            : post
+        )
+      );
     } catch (error) {
       console.error('Error liking post:', error);
     }
   };
 
-  const formatTimeAgo = (dateString: string) => {
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setNewPost(prev => ({ ...prev, image: file }));
+    }
+  };
+
+  const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
     const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
     
     if (diffInHours < 1) return 'Baru saja';
-    if (diffInHours < 24) return `${diffInHours} j`;
-    const diffInDays = Math.floor(diffInHours / 24);
-    if (diffInDays < 7) return `${diffInDays} h`;
+    if (diffInHours < 24) return `${diffInHours} jam yang lalu`;
+    if (diffInHours < 48) return 'Kemarin';
     return date.toLocaleDateString('id-ID');
   };
-
-  const PostCard = ({ post }: { post: CommunityPost }) => (
-    <div className="card">
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
-            <span className="text-sm font-medium text-gray-600">
-              {post.user?.name?.charAt(0).toUpperCase() || 'U'}
-            </span>
-          </div>
-          <div>
-            <div className="font-medium text-gray-900">{post.user?.name || 'Anonymous'}</div>
-            <div className="text-sm text-gray-500">{formatTimeAgo(post.created_at)}</div>
-          </div>
-        </div>
-        <button className="p-1 hover:bg-gray-100 rounded-full">
-          <MoreHorizontal className="w-5 h-5 text-gray-400" />
-        </button>
-      </div>
-
-      <div className="mb-4">
-        <p className="text-gray-900">{post.content}</p>
-        {post.image_url && (
-          <div className="mt-3">
-            <img 
-              src={post.image_url} 
-              alt="Post image" 
-              className="w-full h-48 object-cover rounded-lg"
-            />
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-6">
-        <button 
-          onClick={() => handleLikePost(post.id)}
-          className="flex items-center gap-2 text-gray-600 hover:text-blue-600 transition-colors"
-        >
-          <ThumbsUp className="w-5 h-5" />
-          <span className="text-sm font-medium">{post.likes_count}</span>
-        </button>
-        
-        <button className="flex items-center gap-2 text-gray-600 hover:text-red-600 transition-colors">
-          <ThumbsDown className="w-5 h-5" />
-        </button>
-        
-        <button className="flex items-center gap-2 text-gray-600 hover:text-green-600 transition-colors">
-          <MessageCircle className="w-5 h-5" />
-          <span className="text-sm font-medium">1</span>
-        </button>
-        
-        <button className="flex items-center gap-2 text-gray-600 hover:text-yellow-600 transition-colors">
-          <Bookmark className="w-5 h-5" />
-        </button>
-      </div>
-    </div>
-  );
-
-  const ChatSnippet = ({ chat }: { chat: any }) => (
-    <div className="card">
-      <div className="flex items-start gap-3">
-        <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
-          <span className="text-xs font-medium text-gray-600">
-            {chat.user?.name?.charAt(0).toUpperCase() || 'U'}
-          </span>
-        </div>
-        <div className="flex-1">
-          <div className="font-medium text-gray-900 text-sm mb-1">
-            {chat.user?.name || 'Anonymous'}
-          </div>
-          <p className="text-gray-600 text-sm line-clamp-2">
-            {chat.content}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
 
   if (loading) {
     return (
@@ -181,139 +138,265 @@ export default function CommunityPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-            <MessageCircle className="w-8 h-8 text-blue-600" />
-            Komunitas
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Berbagi pengalaman, bertanya, dan belajar bersama komunitas Strive.
+          <h1 className="text-2xl font-bold text-gray-900">Komunitas</h1>
+          <p className="text-gray-600 mt-1">
+            Berbagi pengalaman dan belajar bersama
           </p>
         </div>
+        <button
+          onClick={() => setShowNewPost(true)}
+          className="btn btn-primary"
+        >
+          Buat Post
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="Cari Topik"
-              className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          {/* Create Post */}
-          <div className="card">
-            <div className="mb-4">
-              <textarea
-                value={newPostContent}
-                onChange={(e) => setNewPostContent(e.target.value)}
-                placeholder="Apa yang ingin kamu bagikan hari ini?"
-                className="w-full p-3 border border-gray-200 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                rows={3}
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors">
-                  <Camera className="w-4 h-4" />
-                  <span className="text-sm font-medium">Foto</span>
-                </button>
-                
-                <button className="flex items-center gap-2 px-3 py-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-colors">
-                  <Video className="w-4 h-4" />
-                  <span className="text-sm font-medium">Video</span>
-                </button>
-                
-                <button className="flex items-center gap-2 px-3 py-2 bg-purple-100 text-purple-600 rounded-lg hover:bg-purple-200 transition-colors">
-                  <Code className="w-4 h-4" />
-                  <span className="text-sm font-medium">Kode</span>
-                </button>
-              </div>
-              
+      {/* Create New Post Modal */}
+      {showNewPost && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-2xl mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Buat Post Baru</h2>
               <button
-                onClick={handleCreatePost}
-                disabled={!newPostContent.trim() || posting}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                onClick={() => setShowNewPost(false)}
+                className="text-gray-400 hover:text-gray-600"
               >
-                <Send className="w-4 h-4" />
-                <span className="text-sm font-medium">Post</span>
+                <MoreHorizontal className="w-5 h-5" />
               </button>
             </div>
-          </div>
 
-          {/* Posts Feed */}
-          <div className="space-y-4">
-            {posts.length > 0 ? (
-              posts.map((post) => (
-                <PostCard key={post.id} post={post} />
-              ))
-            ) : (
-              <div className="card text-center py-12">
-                <MessageCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada post</h3>
-                <p className="text-gray-600">Jadilah yang pertama berbagi di komunitas!</p>
+            <div className="space-y-4">
+              <textarea
+                value={newPost.content}
+                onChange={(e) => setNewPost(prev => ({ ...prev, content: e.target.value }))}
+                placeholder="Apa yang ingin kamu bagikan hari ini?"
+                className="w-full p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                rows={4}
+              />
+
+              {newPost.image && (
+                <div className="relative">
+                  <img
+                    src={URL.createObjectURL(newPost.image)}
+                    alt="Preview"
+                    className="w-full h-48 object-cover rounded-lg"
+                  />
+                  <button
+                    onClick={() => setNewPost(prev => ({ ...prev, image: null }))}
+                    className="absolute top-2 right-2 bg-black bg-opacity-50 text-white rounded-full p-1 hover:bg-opacity-70"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <label className="flex items-center space-x-2 text-sm text-gray-600 cursor-pointer">
+                    <Image className="w-4 h-4" />
+                    <span>Gambar</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <button className="flex items-center space-x-2 text-sm text-gray-600">
+                    <Code className="w-4 h-4" />
+                    <span>Code</span>
+                  </button>
+                  <button className="flex items-center space-x-2 text-sm text-gray-600">
+                    <Smile className="w-4 h-4" />
+                    <span>Emoji</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setShowNewPost(false)}
+                    className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    onClick={handleCreatePost}
+                    disabled={!newPost.content.trim() || posting}
+                    className="btn btn-primary"
+                  >
+                    {posting ? 'Memposting...' : 'Post'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Posts Feed */}
+      <div className="space-y-6">
+        {posts.map((post) => (
+          <div key={post.id} className="card">
+            {/* Post Header */}
+            <div className="flex items-start space-x-3 mb-4">
+              <img
+                src={post.user.avatar_url || '/default-avatar.png'}
+                alt={post.user.name}
+                className="w-10 h-10 rounded-full"
+              />
+              <div className="flex-1">
+                <div className="flex items-center space-x-2">
+                  <h3 className="font-semibold text-gray-900">{post.user.name}</h3>
+                  <span className="text-sm text-gray-500">•</span>
+                  <span className="text-sm text-gray-500">{formatDate(post.created_at)}</span>
+                </div>
+                <p className="text-sm text-gray-600">@{post.user.name.toLowerCase().replace(/\s+/g, '')}</p>
+              </div>
+              <button className="text-gray-400 hover:text-gray-600">
+                <MoreHorizontal className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Post Content */}
+            <div className="mb-4">
+              <p className="text-gray-900 whitespace-pre-wrap">{post.content}</p>
+              {post.image_url && (
+                <img
+                  src={post.image_url}
+                  alt="Post image"
+                  className="mt-3 w-full rounded-lg"
+                />
+              )}
+            </div>
+
+            {/* Post Actions */}
+            <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+              <div className="flex items-center space-x-6">
+                <button
+                  onClick={() => handleLikePost(post.id)}
+                  className={`flex items-center space-x-2 ${
+                    post.is_liked ? 'text-red-500' : 'text-gray-500 hover:text-red-500'
+                  }`}
+                >
+                  <Heart className={`w-5 h-5 ${post.is_liked ? 'fill-current' : ''}`} />
+                  <span className="text-sm">{post.likes_count}</span>
+                </button>
+
+                <button className="flex items-center space-x-2 text-gray-500 hover:text-blue-500">
+                  <MessageCircle className="w-5 h-5" />
+                  <span className="text-sm">{post.comments_count}</span>
+                </button>
+
+                <button className="flex items-center space-x-2 text-gray-500 hover:text-green-500">
+                  <Share className="w-5 h-5" />
+                  <span className="text-sm">Share</span>
+                </button>
+              </div>
+
+              <button className="flex items-center space-x-2 text-gray-500 hover:text-yellow-500">
+                <Bookmark className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Comments Section */}
+            {post.comments && post.comments.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <div className="space-y-3">
+                  {post.comments.slice(0, 2).map((comment) => (
+                    <div key={comment.id} className="flex items-start space-x-3">
+                      <img
+                        src={comment.user.avatar_url || '/default-avatar.png'}
+                        alt={comment.user.name}
+                        className="w-8 h-8 rounded-full"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
+                          <h4 className="font-medium text-gray-900 text-sm">{comment.user.name}</h4>
+                          <span className="text-xs text-gray-500">{formatDate(comment.created_at)}</span>
+                        </div>
+                        <p className="text-sm text-gray-700 mt-1">{comment.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {post.comments.length > 2 && (
+                    <button className="text-sm text-primary-600 hover:text-primary-700">
+                      Lihat {post.comments.length - 2} komentar lainnya
+                    </button>
+                  )}
+                </div>
+
+                {/* Add Comment */}
+                <div className="mt-3 flex items-center space-x-3">
+                  <img
+                    src={user.avatar_url || '/default-avatar.png'}
+                    alt={user.name}
+                    className="w-8 h-8 rounded-full"
+                  />
+                  <div className="flex-1 flex items-center space-x-2">
+                    <input
+                      type="text"
+                      placeholder="Tulis komentar..."
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-full text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                    <button className="p-2 text-primary-600 hover:text-primary-700">
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
-        </div>
+        ))}
+      </div>
 
-        {/* Right Sidebar */}
-        <div className="space-y-6">
-          {/* Recent Chats */}
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">
-              Obrolan Terbaru
-            </h2>
-            
-            <div className="space-y-3">
-              {recentChats.length > 0 ? (
-                recentChats.map((chat, index) => (
-                  <ChatSnippet key={index} chat={chat} />
-                ))
-              ) : (
-                <div className="card text-center py-8">
-                  <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-600 text-sm">Belum ada obrolan</p>
+      {/* Recent Chats Widget */}
+      {recentChats.length > 0 && (
+        <div className="card">
+          <h3 className="font-semibold text-gray-900 mb-4">Chat Terbaru</h3>
+          <div className="space-y-3">
+            {recentChats.map((chat) => (
+              <div key={chat.id} className="flex items-center space-x-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer">
+                <img
+                  src={chat.user.avatar_url || '/default-avatar.png'}
+                  alt={chat.user.name}
+                  className="w-10 h-10 rounded-full"
+                />
+                <div className="flex-1">
+                  <h4 className="font-medium text-gray-900 text-sm">{chat.user.name}</h4>
+                  <p className="text-xs text-gray-600 truncate">{chat.last_message}</p>
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* Community Stats */}
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-4">Statistik Komunitas</h3>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Total Post</span>
-                <span className="font-semibold">{posts.length}</span>
+                <span className="text-xs text-gray-500">{formatDate(chat.updated_at)}</span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Anggota Aktif</span>
-                <span className="font-semibold">1,234</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Post Hari Ini</span>
-                <span className="font-semibold">12</span>
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* AI Assistant Button */}
-      <div className="fixed bottom-6 right-6">
-        <button className="bg-blue-600 text-white px-4 py-3 rounded-xl shadow-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
-          <span className="text-sm font-medium">Tanya StriveAI ✨</span>
-        </button>
-      </div>
+      {/* Empty State */}
+      {posts.length === 0 && (
+        <div className="card">
+          <div className="text-center py-12">
+            <MessageCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              Belum ada post
+            </h3>
+            <p className="text-gray-600 mb-4">
+              Jadilah yang pertama berbagi pengalaman belajar!
+            </p>
+            <button
+              onClick={() => setShowNewPost(true)}
+              className="btn btn-primary"
+            >
+              Buat Post Pertama
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
