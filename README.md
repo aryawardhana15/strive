@@ -436,3 +436,8 @@ For support and questions, please open an issue in the repository.
 - Gamification enhancements
 - Multi-language support
 - Advanced AI tutoring
+
+## 🎨 Design Resources
+- Icons dari Lucide React
+- Images dari Unsplash
+- Font dari Google Fonts
