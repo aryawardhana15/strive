@@ -24,8 +24,25 @@ export const auth = {
   // Login user
   login: async (email: string, password: string): Promise<AuthResponse> => {
     try {
+      console.log('🔧 Auth.login called with:', { email, password });
       const response = await authAPI.login(email, password);
-      const { user, token } = response.data.data;
+      console.log('📦 Auth API response:', response);
+      
+      // Handle both mock and real API response structures
+      let user, token;
+      if (response.data.data.user && response.data.data.token) {
+        // Mock response structure
+        user = response.data.data.user;
+        token = response.data.data.token;
+      } else if (response.data.data && response.data.token) {
+        // Real API response structure
+        user = response.data.data;
+        token = response.data.token;
+      } else {
+        throw new Error('Invalid response structure');
+      }
+      
+      console.log('👤 Extracted user and token:', { user, token });
       
       // Store token and user data
       localStorage.setItem('token', token);
@@ -33,7 +50,8 @@ export const auth = {
       
       return { user, token };
     } catch (error: any) {
-      throw new Error(error.response?.data?.error || 'Login failed');
+      console.error('❌ Auth login error:', error);
+      throw new Error(error.response?.data?.error || error.message || 'Login failed');
     }
   },
 

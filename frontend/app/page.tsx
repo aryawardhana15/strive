@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { User, Job, UserSkill, Activity, Roadmap } from '@/types';
 import { auth } from '@/lib/auth';
-import { usersAPI, jobsAPI, roadmapsAPI } from '@/lib/api';
+import { usersAPI, jobsAPI, roadmapsAPI, skillsAPI, activitiesAPI } from '@/lib/api';
 import WelcomeBanner from '@/components/Dashboard/WelcomeBanner';
 import { StreakCard, RankCard, TitleCard } from '@/components/Dashboard/StatsCard';
 import AddSkillSection from '@/components/Dashboard/AddSkillSection';
@@ -38,14 +38,14 @@ export default function Dashboard() {
           usersAPI.getProfile(currentUser.id),
           skillsAPI.getUserSkills(currentUser.id),
           jobsAPI.getRecommended(currentUser.id, { limit: 6 }),
-          usersAPI.getActivities(currentUser.id, { limit: 4 }),
+          activitiesAPI.getRecentActivities(currentUser.id, { limit: 4 }),
           roadmapsAPI.getAll()
         ]);
 
         setUser(profileResponse.data.data);
-        setUserSkills(skillsResponse.data.data.skills || []);
+        setUserSkills(skillsResponse.data.data || []);
         setJobRecommendations(jobsResponse.data.data || []);
-        setRecentActivities(activitiesResponse.data.data.activities || []);
+        setRecentActivities(activitiesResponse.data.data || []);
 
         // Set active course (first roadmap for demo)
         if (roadmapsResponse.data.data.length > 0) {

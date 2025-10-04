@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { mockAPIResponses } from './mockData';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
@@ -38,15 +39,62 @@ api.interceptors.response.use(
   }
 );
 
+// Mock mode flag - set to true to use mock data
+const USE_MOCK_DATA = false;
+
 // Auth API
 export const authAPI = {
-  login: (email: string, password: string) =>
-    api.post('/auth/login', { email, password }),
-  register: (name: string, email: string, password: string) =>
-    api.post('/auth/register', { name, email, password }),
-  me: () => api.get('/auth/me'),
-  refresh: () => api.post('/auth/refresh'),
-  logout: () => api.post('/auth/logout'),
+  login: (email: string, password: string) => {
+    if (USE_MOCK_DATA) {
+      console.log('🔧 Mock login called with:', { email, password });
+      // Mock successful login
+      const mockUser = { 
+        id: 1, 
+        name: "Arya Pratama", 
+        email: "arya@example.com",
+        avatar_url: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&h=150&fit=crop&crop=face",
+        title: "Intermediate",
+        xp_total: 2450,
+        streak_count: 7,
+        study_time: 32
+      };
+      localStorage.setItem('token', 'mock-jwt-token');
+      localStorage.setItem('user', JSON.stringify(mockUser));
+      console.log('✅ Mock login successful, user stored:', mockUser);
+      return Promise.resolve({ data: { data: { user: mockUser, token: 'mock-jwt-token' } } });
+    }
+    return api.post('/auth/login', { email, password });
+  },
+  register: (name: string, email: string, password: string) => {
+    if (USE_MOCK_DATA) {
+      const mockUser = { id: 1, name, email };
+      localStorage.setItem('token', 'mock-jwt-token');
+      localStorage.setItem('user', JSON.stringify(mockUser));
+      return Promise.resolve({ data: { data: mockUser, token: 'mock-jwt-token' } });
+    }
+    return api.post('/auth/register', { name, email, password });
+  },
+  me: () => {
+    if (USE_MOCK_DATA) {
+      const user = localStorage.getItem('user');
+      return Promise.resolve({ data: { data: user ? JSON.parse(user) : null } });
+    }
+    return api.get('/auth/me');
+  },
+  refresh: () => {
+    if (USE_MOCK_DATA) {
+      return Promise.resolve({ data: { token: 'mock-jwt-token' } });
+    }
+    return api.post('/auth/refresh');
+  },
+  logout: () => {
+    if (USE_MOCK_DATA) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      return Promise.resolve({ data: { message: 'Logged out successfully' } });
+    }
+    return api.post('/auth/logout');
+  },
 };
 
 // Users API
@@ -61,9 +109,9 @@ export const usersAPI = {
     });
   },
   getActivities: (userId: number, params?: any) =>
-    api.get(`/users/${userId}/activities`, { params }),
+    api.get(`/activities/users/${userId}`, { params }),
   getRecommendedJobs: (userId: number, params?: any) =>
-    api.get(`/users/${userId}/recommended-jobs`, { params }),
+    api.get(`/jobs/users/${userId}/recommended`, { params }),
   getProgress: (userId: number) => api.get(`/users/${userId}/progress`),
   getXPHistory: (userId: number, params?: any) =>
     api.get(`/users/${userId}/xp-history`, { params }),
@@ -90,7 +138,6 @@ export const jobsAPI = {
   getById: (id: number) => api.get(`/jobs/${id}`),
   getRecommended: (userId: number, params?: any) =>
     api.get(`/jobs/users/${userId}/recommended`, { params }),
-  getCategories: () => api.get('/jobs/meta/categories'),
   getSimilar: (id: number, params?: any) => api.get(`/jobs/${id}/similar`, { params }),
 };
 
@@ -113,8 +160,8 @@ export const challengesAPI = {
   getByType: (type: string) => api.get(`/challenges/type/${type}`),
   getById: (id: number) => api.get(`/challenges/${id}`),
   start: (id: number) => api.post(`/challenges/${id}/start`),
-  submit: (id: number, code: string, language: string) =>
-    api.post(`/challenges/${id}/submit`, { code, language }),
+  submit: (id: number, data: { code: string; language?: string }) =>
+    api.post(`/challenges/${id}/submit`, data),
   getProgress: (userId: number) => api.get(`/challenges/users/${userId}/progress`),
   getCompleted: (userId: number, params?: any) =>
     api.get(`/challenges/users/${userId}/completed`, { params }),
@@ -123,9 +170,7 @@ export const challengesAPI = {
 
 // CV API
 export const cvAPI = {
-  upload: (file: File) => {
-    const formData = new FormData();
-    formData.append('cv', file);
+  upload: (formData: FormData) => {
     return api.post('/cv/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
