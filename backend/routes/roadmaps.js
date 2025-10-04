@@ -1,6 +1,6 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { validate, submitQuizSchema } = require('../middleware/validation');
 const { generateQuiz, gradeQuiz } = require('../utils/ai');
 const { updateUserXP, updateStreak } = require('../utils/helpers');
@@ -24,7 +24,7 @@ router.get('/', async (req, res) => {
 });
 
 // Get roadmap by ID with steps
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', requireAuth, async (req, res) => {
   try {
     const roadmapId = req.params.id;
     const userId = req.user.id;
@@ -43,7 +43,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Get roadmap steps
     const [steps] = await pool.execute(
-      `SELECT rs.id, rs.title, rs.order_index, rs.content, rs.quiz_id,
+      `SELECT rs.id, rs.title, rs.order_index, rs.content,
               urp.completed, urp.completed_at
        FROM roadmap_steps rs
        LEFT JOIN user_roadmap_progress urp ON rs.id = urp.step_id AND urp.user_id = ?
@@ -78,20 +78,17 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Get roadmap steps
-router.get('/:id/steps', authenticateToken, async (req, res) => {
+// Get roadmap steps (temporary without auth for testing)
+router.get('/:id/steps', async (req, res) => {
   try {
     const roadmapId = req.params.id;
-    const userId = req.user.id;
 
     const [steps] = await pool.execute(
-      `SELECT rs.id, rs.title, rs.order_index, rs.content, rs.quiz_id,
-              urp.completed, urp.completed_at
+      `SELECT rs.id, rs.title, rs.order_index, rs.content
        FROM roadmap_steps rs
-       LEFT JOIN user_roadmap_progress urp ON rs.id = urp.step_id AND urp.user_id = ?
        WHERE rs.roadmap_id = ?
        ORDER BY rs.order_index`,
-      [userId, roadmapId]
+      [roadmapId]
     );
 
     return successResponse(res, steps, 'Roadmap steps retrieved successfully');
@@ -102,16 +99,15 @@ router.get('/:id/steps', authenticateToken, async (req, res) => {
   }
 });
 
-// Get quiz for a specific step
-router.get('/:roadmapId/step/:stepId/quiz', authenticateToken, async (req, res) => {
+// Get quiz for a specific step (temporary without auth for testing)
+router.get('/:roadmapId/step/:stepId/quiz', async (req, res) => {
   try {
     const roadmapId = req.params.roadmapId;
     const stepId = req.params.stepId;
-    const userId = req.user.id;
 
-    // Verify step belongs to roadmap
+    // Verify step belongs to roadmap and get step details
     const [steps] = await pool.execute(
-      'SELECT id, title, quiz_id FROM roadmap_steps WHERE id = ? AND roadmap_id = ?',
+      'SELECT id, title, content FROM roadmap_steps WHERE id = ? AND roadmap_id = ?',
       [stepId, roadmapId]
     );
 
@@ -121,61 +117,17 @@ router.get('/:roadmapId/step/:stepId/quiz', authenticateToken, async (req, res) 
 
     const step = steps[0];
 
-    // Check if user has already completed this step
-    const [progress] = await pool.execute(
-      'SELECT completed FROM user_roadmap_progress WHERE user_id = ? AND step_id = ?',
-      [userId, stepId]
-    );
-
-    if (progress.length > 0 && progress[0].completed) {
-      return errorResponse(res, 400, 'You have already completed this step');
-    }
-
-    // Check if quiz already exists
-    let quiz;
-    if (step.quiz_id) {
-      const [existingQuizzes] = await pool.execute(
-        'SELECT id, questions FROM quizzes WHERE id = ?',
-        [step.quiz_id]
-      );
-
-      if (existingQuizzes.length > 0) {
-        quiz = existingQuizzes[0];
-      }
-    }
-
-    // Generate new quiz if none exists
-    if (!quiz) {
-      const quizData = await generateQuiz(step.title, 'intermediate');
-      
-      // Save quiz to database
-      const [quizResult] = await pool.execute(
-        'INSERT INTO quizzes (step_id, questions) VALUES (?, ?)',
-        [stepId, JSON.stringify(quizData.questions)]
-      );
-
-      const quizId = quizResult.insertId;
-
-      // Update step with quiz_id
-      await pool.execute(
-        'UPDATE roadmap_steps SET quiz_id = ? WHERE id = ?',
-        [quizId, stepId]
-      );
-
-      quiz = {
-        id: quizId,
-        questions: quizData.questions
-      };
-    } else {
-      // Parse existing quiz questions
-      quiz.questions = JSON.parse(quiz.questions);
-    }
-
-    return successResponse(res, {
+    // Generate quiz dynamically using GROQ API (always fresh)
+    const quizData = await generateQuiz(step.title, step.content, 'intermediate');
+    
+    const quiz = {
+      id: `temp_${stepId}_${Date.now()}`, // Temporary ID for frontend
       step_id: stepId,
-      step_title: step.title,
-      quiz: quiz
-    }, 'Quiz retrieved successfully');
+      roadmap_id: roadmapId,
+      questions: quizData.questions
+    };
+
+    return successResponse(res, quiz, 'Quiz generated successfully');
 
   } catch (error) {
     console.error('Get quiz error:', error);
@@ -184,16 +136,16 @@ router.get('/:roadmapId/step/:stepId/quiz', authenticateToken, async (req, res) 
 });
 
 // Submit quiz answers
-router.post('/:roadmapId/step/:stepId/submit-quiz', authenticateToken, validate(submitQuizSchema), async (req, res) => {
+router.post('/:roadmapId/step/:stepId/submit-quiz', requireAuth, validate(submitQuizSchema), async (req, res) => {
   try {
     const roadmapId = req.params.roadmapId;
     const stepId = req.params.stepId;
     const userId = req.user.id;
     const { answers } = req.body;
 
-    // Verify step belongs to roadmap
+    // Verify step belongs to roadmap and get step details
     const [steps] = await pool.execute(
-      'SELECT id, title, quiz_id FROM roadmap_steps WHERE id = ? AND roadmap_id = ?',
+      'SELECT id, title, content FROM roadmap_steps WHERE id = ? AND roadmap_id = ?',
       [stepId, roadmapId]
     );
 
@@ -213,17 +165,9 @@ router.post('/:roadmapId/step/:stepId/submit-quiz', authenticateToken, validate(
       return errorResponse(res, 400, 'You have already completed this step');
     }
 
-    // Get quiz questions
-    const [quizzes] = await pool.execute(
-      'SELECT questions FROM quizzes WHERE step_id = ?',
-      [stepId]
-    );
-
-    if (quizzes.length === 0) {
-      return errorResponse(res, 404, 'Quiz not found for this step');
-    }
-
-    const questions = JSON.parse(quizzes[0].questions);
+    // Generate quiz questions dynamically to get correct answers for grading
+    const quizData = await generateQuiz(step.title, step.content, 'intermediate');
+    const questions = quizData.questions;
 
     // Grade the quiz using AI
     const gradingResult = await gradeQuiz(questions, answers);
@@ -265,7 +209,7 @@ router.post('/:roadmapId/step/:stepId/submit-quiz', authenticateToken, validate(
 });
 
 // Get user's roadmap progress
-router.get('/:id/progress', authenticateToken, async (req, res) => {
+router.get('/:id/progress', requireAuth, async (req, res) => {
   try {
     const roadmapId = req.params.id;
     const userId = req.user.id;
@@ -305,7 +249,7 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
 });
 
 // Get user's learning statistics
-router.get('/users/:userId/stats', authenticateToken, async (req, res) => {
+router.get('/users/:userId/stats', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
 
