@@ -2,30 +2,32 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { User, Activity } from '@/types';
+import { User, Activity, ActivityStats } from '@/types';
 import { auth } from '@/lib/auth';
-import { usersAPI } from '@/lib/api';
+import { activitiesAPI } from '@/lib/api';
 import { 
   Trophy, 
-  BookOpen, 
+  Target, 
   FileText, 
-  Flame, 
-  Users, 
+  MessageCircle, 
   TrendingUp, 
-  Plus,
   Star,
-  Clock,
-  Filter,
-  Calendar
+  CheckCircle,
+  Award,
+  BookOpen,
+  Code,
+  Calendar,
+  Filter
 } from 'lucide-react';
 
 export default function ActivitiesPage() {
   const [user, setUser] = useState<User | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [stats, setStats] = useState<ActivityStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const [filter, setFilter] = useState<string>('all');
   const router = useRouter();
 
   useEffect(() => {
@@ -39,119 +41,148 @@ export default function ActivitiesPage() {
 
         setUser(currentUser);
 
-        // Fetch activities
-        const response = await usersAPI.getActivities(currentUser.id, { 
-          limit: 20, 
-          page: 1
-        });
+        // Fetch activities and stats
+        const [activitiesResponse, statsResponse] = await Promise.all([
+          activitiesAPI.getUserActivities(currentUser.id, { page: 1, limit: 20 }),
+          activitiesAPI.getStats(currentUser.id)
+        ]);
 
-        setActivities(response.data.data.activities || []);
-        setHasMore(response.data.data.hasMore || false);
+        setActivities(activitiesResponse.data.data || []);
+        setStats(statsResponse.data.data || null);
+        setHasMore(activitiesResponse.data.data.length === 20);
 
       } catch (error) {
-        console.error('Error initializing activities:', error);
+        console.error('Error initializing activities page:', error);
       } finally {
         setLoading(false);
       }
     };
 
     initializeActivities();
-  }, [router, filter]);
+  }, [router]);
 
   const loadMoreActivities = async () => {
-    if (!hasMore || loading) return;
+    if (!user || !hasMore) return;
 
     try {
-      const response = await usersAPI.getActivities(user!.id, { 
-        limit: 20, 
-        page: page + 1
+      const nextPage = page + 1;
+      const response = await activitiesAPI.getUserActivities(user.id, { 
+        page: nextPage, 
+        limit: 20,
+        type: filter !== 'all' ? filter : undefined
       });
 
-      setActivities(prev => [...prev, ...(response.data.data.activities || [])]);
-      setHasMore(response.data.data.hasMore || false);
-      setPage(prev => prev + 1);
+      const newActivities = response.data.data || [];
+      setActivities(prev => [...prev, ...newActivities]);
+      setPage(nextPage);
+      setHasMore(newActivities.length === 20);
+
     } catch (error) {
       console.error('Error loading more activities:', error);
+    }
+  };
+
+  const handleFilterChange = async (newFilter: string) => {
+    if (!user) return;
+
+    setFilter(newFilter);
+    setPage(1);
+    setLoading(true);
+
+    try {
+      const response = await activitiesAPI.getUserActivities(user.id, { 
+        page: 1, 
+        limit: 20,
+        type: newFilter !== 'all' ? newFilter : undefined
+      });
+
+      setActivities(response.data.data || []);
+      setHasMore(response.data.data.length === 20);
+
+    } catch (error) {
+      console.error('Error filtering activities:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'quiz_complete':
-        return <BookOpen className="w-5 h-5 text-blue-500" />;
+        return <CheckCircle className="w-5 h-5 text-green-500" />;
       case 'challenge_complete':
-        return <Trophy className="w-5 h-5 text-yellow-500" />;
+        return <Target className="w-5 h-5 text-blue-500" />;
       case 'cv_review':
-        return <FileText className="w-5 h-5 text-green-500" />;
+        return <FileText className="w-5 h-5 text-purple-500" />;
       case 'streak_achieved':
-        return <Flame className="w-5 h-5 text-orange-500" />;
+        return <Star className="w-5 h-5 text-yellow-500" />;
       case 'community_post':
-        return <Users className="w-5 h-5 text-purple-500" />;
+        return <MessageCircle className="w-5 h-5 text-indigo-500" />;
       case 'rank_change':
-        return <TrendingUp className="w-5 h-5 text-indigo-500" />;
+        return <TrendingUp className="w-5 h-5 text-orange-500" />;
+      case 'course_enrolled':
+        return <BookOpen className="w-5 h-5 text-teal-500" />;
       case 'skill_added':
-        return <Plus className="w-5 h-5 text-pink-500" />;
+        return <Code className="w-5 h-5 text-pink-500" />;
       default:
-        return <Star className="w-5 h-5 text-gray-500" />;
+        return <Award className="w-5 h-5 text-gray-500" />;
     }
   };
 
-  const getActivityTitle = (type: string, meta: any) => {
-    switch (type) {
+  const getActivityTitle = (activity: Activity) => {
+    switch (activity.type) {
       case 'quiz_complete':
-        return `Menyelesaikan Quiz: ${meta?.quiz_title || 'Quiz'}`;
+        return `Menyelesaikan quiz: ${activity.meta?.step_title || 'Unknown Step'}`;
       case 'challenge_complete':
-        return `Menyelesaikan Tantangan: ${meta?.challenge_title || 'Tantangan'}`;
+        return `Menyelesaikan challenge: ${activity.meta?.challenge_title || 'Unknown Challenge'}`;
       case 'cv_review':
-        return 'Mengunggah CV untuk Review';
+        return 'Mengupload dan menganalisis CV';
       case 'streak_achieved':
-        return `Mencapai Streak ${meta?.streak_count || 0} hari`;
+        return `Mencapai streak ${activity.meta?.streak_count || 0} hari`;
       case 'community_post':
-        return 'Membuat Post di Komunitas';
+        return 'Membuat post di komunitas';
       case 'rank_change':
-        return `Peringkat naik ke #${meta?.new_rank || 0}`;
+        return `Naik ke peringkat ${activity.meta?.new_rank || 'Unknown'}`;
+      case 'course_enrolled':
+        return `Mendaftar course: ${activity.meta?.course_title || 'Unknown Course'}`;
       case 'skill_added':
-        return `Menambahkan Skill: ${meta?.skill_name || 'Skill Baru'}`;
+        return `Menambahkan skill: ${activity.meta?.skill_name || 'Unknown Skill'}`;
       default:
-        return 'Aktivitas Baru';
+        return 'Aktivitas baru';
     }
   };
 
-  const getActivityDescription = (type: string, meta: any) => {
-    switch (type) {
+  const getActivityDescription = (activity: Activity) => {
+    switch (activity.type) {
       case 'quiz_complete':
-        return `Skor: ${meta?.score || 0}%`;
+        return `Skor: ${activity.meta?.score || 0}%`;
       case 'challenge_complete':
-        return `Tantangan ${meta?.challenge_type || 'umum'} selesai`;
+        return `Tipe: ${activity.meta?.challenge_type || 'Unknown'}`;
       case 'cv_review':
-        return 'CV sedang dianalisis oleh AI';
+        return `Skor CV: ${activity.meta?.cv_score || 0}/100`;
       case 'streak_achieved':
-        return 'Terus pertahankan streak belajarmu!';
+        return 'Pertahankan konsistensi belajarmu!';
       case 'community_post':
-        return 'Post berhasil dipublikasikan';
+        return 'Terima kasih telah berbagi dengan komunitas';
       case 'rank_change':
-        return `Dari peringkat #${meta?.old_rank || 0}`;
+        return `Dari peringkat ${activity.meta?.old_rank || 'Unknown'}`;
+      case 'course_enrolled':
+        return 'Selamat memulai perjalanan belajar baru!';
       case 'skill_added':
-        return `Level: ${meta?.skill_level || 'Beginner'}`;
+        return `Level: ${activity.meta?.skill_level || 'Unknown'}`;
       default:
         return '';
     }
   };
 
-  const formatTimeAgo = (dateString: string) => {
+  const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
-    const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+    const diffInHours = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60));
     
-    if (diffInMinutes < 1) return 'Baru saja';
-    if (diffInMinutes < 60) return `${diffInMinutes} menit yang lalu`;
-    
-    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 1) return 'Baru saja';
     if (diffInHours < 24) return `${diffInHours} jam yang lalu`;
-    
-    const diffInDays = Math.floor(diffInHours / 24);
-    if (diffInDays < 7) return `${diffInDays} hari yang lalu`;
-    
+    if (diffInHours < 48) return 'Kemarin';
     return date.toLocaleDateString('id-ID', {
       year: 'numeric',
       month: 'long',
@@ -160,17 +191,16 @@ export default function ActivitiesPage() {
   };
 
   const filterOptions = [
-    { value: 'all', label: 'Semua Aktivitas' },
-    { value: 'quiz_complete', label: 'Quiz' },
-    { value: 'challenge_complete', label: 'Tantangan' },
-    { value: 'cv_review', label: 'CV Review' },
-    { value: 'streak_achieved', label: 'Streak' },
-    { value: 'community_post', label: 'Komunitas' },
-    { value: 'skill_added', label: 'Skill' },
-    { value: 'rank_change', label: 'Peringkat' }
+    { value: 'all', label: 'Semua Aktivitas', icon: Calendar },
+    { value: 'quiz_complete', label: 'Quiz', icon: CheckCircle },
+    { value: 'challenge_complete', label: 'Challenge', icon: Target },
+    { value: 'cv_review', label: 'CV Review', icon: FileText },
+    { value: 'streak_achieved', label: 'Streak', icon: Star },
+    { value: 'community_post', label: 'Komunitas', icon: MessageCircle },
+    { value: 'rank_change', label: 'Peringkat', icon: TrendingUp }
   ];
 
-  if (loading) {
+  if (loading && activities.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="loading-spinner"></div>
@@ -187,122 +217,162 @@ export default function ActivitiesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-            <Clock className="w-8 h-8 text-blue-600" />
-            Aktivitas & Riwayat
-          </h1>
-          <p className="text-gray-600 mt-2">
-            Lihat semua aktivitas dan pencapaianmu di platform Strive.
+          <h1 className="text-2xl font-bold text-gray-900">Aktivitas</h1>
+          <p className="text-gray-600 mt-1">
+            Riwayat lengkap aktivitas dan pencapaianmu
           </p>
         </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-blue-600">{activities.length}</div>
-          <div className="text-sm text-gray-600">Total Aktivitas</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-green-600">
-            {activities.filter(a => a.type === 'quiz_complete').length}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="card">
+            <div className="flex items-center">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Trophy className="w-6 h-6 text-blue-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-600">Total XP</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.total_xp.toLocaleString()}</p>
+              </div>
+            </div>
           </div>
-          <div className="text-sm text-gray-600">Quiz Selesai</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-yellow-600">
-            {activities.filter(a => a.type === 'challenge_complete').length}
-          </div>
-          <div className="text-sm text-gray-600">Tantangan Selesai</div>
-        </div>
-        <div className="card text-center">
-          <div className="text-2xl font-bold text-orange-600">
-            {activities.reduce((sum, a) => sum + (a.xp_earned || 0), 0)}
-          </div>
-          <div className="text-sm text-gray-600">Total XP</div>
-        </div>
-      </div>
 
-      {/* Filter */}
-      <div className="flex items-center gap-4">
-        <Filter className="w-5 h-5 text-gray-500" />
+          <div className="card">
+            <div className="flex items-center">
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle className="w-6 h-6 text-green-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-600">Quiz Selesai</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.quiz_completed}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="flex items-center">
+              <div className="p-3 bg-purple-100 rounded-lg">
+                <Target className="w-6 h-6 text-purple-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-600">Challenge Selesai</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.challenges_completed}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="flex items-center">
+              <div className="p-3 bg-yellow-100 rounded-lg">
+                <Star className="w-6 h-6 text-yellow-600" />
+              </div>
+              <div className="ml-4">
+                <p className="text-sm font-medium text-gray-600">Streak Terpanjang</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.longest_streak}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filter Tabs */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Riwayat Aktivitas</h2>
+          <div className="flex items-center space-x-2">
+            <Filter className="w-4 h-4 text-gray-500" />
+            <span className="text-sm text-gray-600">Filter:</span>
+          </div>
+        </div>
+
         <div className="flex flex-wrap gap-2">
-          {filterOptions.map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setFilter(option.value)}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                filter === option.value
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
+          {filterOptions.map((option) => {
+            const Icon = option.icon;
+            return (
+              <button
+                key={option.value}
+                onClick={() => handleFilterChange(option.value)}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  filter === option.value
+                    ? 'bg-primary-100 text-primary-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{option.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Activities List */}
       <div className="space-y-4">
-        {activities.length > 0 ? (
-          activities.map((activity) => (
-            <div key={activity.id} className="card">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center">
-                  {getActivityIcon(activity.type)}
-                </div>
-                
-                <div className="flex-1">
-                  <h3 className="font-semibold text-gray-900 mb-1">
-                    {getActivityTitle(activity.type, activity.meta)}
-                  </h3>
-                  <p className="text-gray-600 text-sm mb-2">
-                    {getActivityDescription(activity.type, activity.meta)}
-                  </p>
-                  <div className="flex items-center gap-4 text-sm text-gray-500">
-                    <div className="flex items-center gap-1">
-                      <Calendar className="w-4 h-4" />
-                      {formatTimeAgo(activity.created_at)}
-                    </div>
+        {activities.map((activity) => (
+          <div key={activity.id} className="card">
+            <div className="flex items-start space-x-4">
+              <div className="flex-shrink-0 mt-1">
+                {getActivityIcon(activity.type)}
+              </div>
+              
+              <div className="flex-1">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="font-medium text-gray-900">
+                      {getActivityTitle(activity)}
+                    </h3>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {getActivityDescription(activity)}
+                    </p>
+                  </div>
+                  
+                  <div className="text-right">
                     {activity.xp_earned > 0 && (
-                      <div className="flex items-center gap-1 text-green-600">
-                        <Star className="w-4 h-4" />
-                        +{activity.xp_earned} XP
+                      <div className="flex items-center space-x-1 text-sm text-green-600">
+                        <span className="font-medium">+{activity.xp_earned}</span>
+                        <span>XP</span>
                       </div>
                     )}
+                    <p className="text-xs text-gray-500 mt-1">
+                      {formatDate(activity.created_at)}
+                    </p>
                   </div>
                 </div>
               </div>
             </div>
-          ))
-        ) : (
-          <div className="card text-center py-12">
-            <Clock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Belum ada aktivitas</h3>
-            <p className="text-gray-600">Mulai belajar untuk melihat aktivitasmu di sini!</p>
           </div>
-        )}
-
-        {/* Load More Button */}
-        {hasMore && activities.length > 0 && (
-          <div className="text-center">
-            <button
-              onClick={loadMoreActivities}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Muat Lebih Banyak
-            </button>
-          </div>
-        )}
+        ))}
       </div>
 
-      {/* AI Assistant Button */}
-      <div className="fixed bottom-6 right-6">
-        <button className="bg-blue-600 text-white px-4 py-3 rounded-xl shadow-lg hover:bg-blue-700 transition-colors flex items-center gap-2">
-          <span className="text-sm font-medium">Tanya StriveAI ✨</span>
-        </button>
-      </div>
+      {/* Load More Button */}
+      {hasMore && (
+        <div className="text-center">
+          <button
+            onClick={loadMoreActivities}
+            disabled={loading}
+            className="btn btn-secondary"
+          >
+            {loading ? 'Memuat...' : 'Muat Lebih Banyak'}
+          </button>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {activities.length === 0 && !loading && (
+        <div className="card">
+          <div className="text-center py-12">
+            <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              Belum ada aktivitas
+            </h3>
+            <p className="text-gray-600">
+              Mulai belajar untuk melihat aktivitas dan pencapaianmu di sini.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

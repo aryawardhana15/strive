@@ -1,12 +1,12 @@
 const express = require('express');
 const pool = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { requireAuth } = require('../middleware/auth');
 const { errorResponse, successResponse } = require('../utils/helpers');
 
 const router = express.Router();
 
 // Get user's activities
-router.get('/users/:userId', authenticateToken, async (req, res) => {
+router.get('/users/:userId', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const limit = parseInt(req.query.limit) || 10;
@@ -50,7 +50,7 @@ router.get('/users/:userId', authenticateToken, async (req, res) => {
 });
 
 // Get recent activities (for dashboard widget)
-router.get('/users/:userId/recent', authenticateToken, async (req, res) => {
+router.get('/users/:userId/recent', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const limit = parseInt(req.query.limit) || 4;
@@ -78,7 +78,7 @@ router.get('/users/:userId/recent', authenticateToken, async (req, res) => {
 });
 
 // Get activities by type
-router.get('/users/:userId/type/:type', authenticateToken, async (req, res) => {
+router.get('/users/:userId/type/:type', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
     const activityType = req.params.type;
@@ -128,7 +128,7 @@ router.get('/users/:userId/type/:type', authenticateToken, async (req, res) => {
 });
 
 // Get activity statistics
-router.get('/users/:userId/stats', authenticateToken, async (req, res) => {
+router.get('/users/:userId/stats', requireAuth, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
 
